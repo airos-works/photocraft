@@ -11,3 +11,8 @@ target/
 /craft-fonts
 *.log
 __pycache__/
+
+/artifacts/
+
+/vendor/*/Cargo.lock
+/tools/haiku/__pycache__/

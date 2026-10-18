@@ -1,0 +1,454 @@
+{
+  "date": "2026-10-18",
+  "upstream": "8d2e615ab93d",
+  "benchmark_definition": "24 MP, 3 layers, opacity changes; command to next frame, including rendering/presentation",
+  "benchmark": {
+    "amd": {
+      "size": [
+        6000,
+        4000
+      ],
+      "depth": 8,
+      "layers": 3,
+      "warmups": 2,
+      "samples": 8,
+      "vulkan": {
+        "samples": [
+          {
+            "endToEndMs": 58.31699999544071,
+            "compositeMs": 1.9870000000228174,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 58.33800000254996,
+            "compositeMs": 1.9400000000314321,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 58.477999999013264,
+            "compositeMs": 1.8280000000377186,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 57.78299999656156,
+            "compositeMs": 2.0239999999757856,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 57.45500000193715,
+            "compositeMs": 1.9940000000060536,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 55.21500000031665,
+            "compositeMs": 1.8440000000118744,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 55.10900000081165,
+            "compositeMs": 1.8359999999811407,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 56.83100000169361,
+            "compositeMs": 1.7190000000118744,
+            "uploadMs": 0.0
+          }
+        ],
+        "medianMs": 57.618999999249354,
+        "gpuInfo": {
+          "adapter": "AMD Radeon 760M Graphics (RADV PHOENIX)",
+          "backend": "vulkan",
+          "canvas": "gpu",
+          "deviceType": "integratedGpu",
+          "driver": "radv Mesa 25.3.6 (git-006c0504b9)",
+          "fallback": null,
+          "lost": null,
+          "preference": "vulkan",
+          "present": "native bitmap readback",
+          "selected": "vulkan",
+          "videoMemoryMb": null
+        }
+      },
+      "simulatedLoss": {
+        "gpuInfo": {
+          "adapter": "AMD Radeon 760M Graphics (RADV PHOENIX)",
+          "backend": "vulkan",
+          "canvas": "cpu",
+          "deviceType": "integratedGpu",
+          "driver": "radv Mesa 25.3.6 (git-006c0504b9)",
+          "fallback": null,
+          "lost": "GPU device lost: simulated (ui.gpu.simulateLoss)",
+          "preference": "vulkan",
+          "present": "native bitmap readback",
+          "selected": "vulkan",
+          "videoMemoryMb": null
+        },
+        "wasActive": true
+      },
+      "afterLoss": {
+        "adapter": "AMD Radeon 760M Graphics (RADV PHOENIX)",
+        "backend": "vulkan",
+        "canvas": "cpu",
+        "deviceType": "integratedGpu",
+        "driver": "radv Mesa 25.3.6 (git-006c0504b9)",
+        "fallback": null,
+        "lost": "GPU device lost: simulated (ui.gpu.simulateLoss)",
+        "preference": "vulkan",
+        "present": "native software bitmap",
+        "selected": "vulkan",
+        "videoMemoryMb": null
+      },
+      "cpu": {
+        "samples": [
+          {
+            "endToEndMs": 464.1280000068946,
+            "compositeMs": 406.2760000000126,
+            "uploadMs": 11.955999999976484
+          },
+          {
+            "endToEndMs": 457.0240000030026,
+            "compositeMs": 398.75700000001234,
+            "uploadMs": 12.688000000023749
+          },
+          {
+            "endToEndMs": 465.72700000251643,
+            "compositeMs": 408.41299999997136,
+            "uploadMs": 12.151000000012573
+          },
+          {
+            "endToEndMs": 466.52999999787426,
+            "compositeMs": 405.5469999999623,
+            "uploadMs": 12.725000000034925
+          },
+          {
+            "endToEndMs": 467.596999995294,
+            "compositeMs": 408.6479999999865,
+            "uploadMs": 12.143999999971129
+          },
+          {
+            "endToEndMs": 470.37799999816343,
+            "compositeMs": 411.28000000002794,
+            "uploadMs": 12.440999999991618
+          },
+          {
+            "endToEndMs": 473.25999999884516,
+            "compositeMs": 414.91599999999744,
+            "uploadMs": 12.597000000008848
+          },
+          {
+            "endToEndMs": 468.08999999484513,
+            "compositeMs": 408.76900000002934,
+            "uploadMs": 12.354999999981374
+          }
+        ],
+        "medianMs": 467.06349999658414,
+        "gpuInfo": {
+          "adapter": "AMD Radeon 760M Graphics (RADV PHOENIX)",
+          "backend": "vulkan",
+          "canvas": "cpu",
+          "deviceType": "integratedGpu",
+          "driver": "radv Mesa 25.3.6 (git-006c0504b9)",
+          "fallback": null,
+          "lost": "GPU device lost: simulated (ui.gpu.simulateLoss)",
+          "preference": "vulkan",
+          "present": "native software bitmap",
+          "selected": "vulkan",
+          "videoMemoryMb": null
+        }
+      },
+      "speedup": 8.106067443077265
+    },
+    "nvidia": {
+      "size": [
+        6000,
+        4000
+      ],
+      "depth": 8,
+      "layers": 3,
+      "warmups": 2,
+      "samples": 8,
+      "vulkan": {
+        "samples": [
+          {
+            "endToEndMs": 98.16099999807193,
+            "compositeMs": 47.25,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 97.68899999835412,
+            "compositeMs": 47.30799999998999,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 97.32299999814131,
+            "compositeMs": 47.28900000001886,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 98.62799999973504,
+            "compositeMs": 47.36499999999069,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 92.2290000016801,
+            "compositeMs": 47.30199999999604,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 92.92400000049383,
+            "compositeMs": 47.44800000000396,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 96.87800000028801,
+            "compositeMs": 47.279999999998836,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 97.28399999949033,
+            "compositeMs": 47.44199999998091,
+            "uploadMs": 0.0
+          }
+        ],
+        "medianMs": 97.30349999881582,
+        "gpuInfo": {
+          "adapter": "NVIDIA GeForce GTX 1070 (NVK GP104-A)",
+          "backend": "vulkan",
+          "canvas": "gpu",
+          "deviceType": "discreteGpu",
+          "driver": "NVK Mesa 25.3.0-devel (git-fb38f2207c)",
+          "fallback": null,
+          "lost": null,
+          "preference": "vulkan",
+          "present": "native bitmap readback",
+          "selected": "vulkan",
+          "videoMemoryMb": null
+        }
+      },
+      "simulatedLoss": {
+        "gpuInfo": {
+          "adapter": "NVIDIA GeForce GTX 1070 (NVK GP104-A)",
+          "backend": "vulkan",
+          "canvas": "cpu",
+          "deviceType": "discreteGpu",
+          "driver": "NVK Mesa 25.3.0-devel (git-fb38f2207c)",
+          "fallback": null,
+          "lost": "GPU device lost: simulated (ui.gpu.simulateLoss)",
+          "preference": "vulkan",
+          "present": "native bitmap readback",
+          "selected": "vulkan",
+          "videoMemoryMb": null
+        },
+        "wasActive": true
+      },
+      "afterLoss": {
+        "adapter": "NVIDIA GeForce GTX 1070 (NVK GP104-A)",
+        "backend": "vulkan",
+        "canvas": "cpu",
+        "deviceType": "discreteGpu",
+        "driver": "NVK Mesa 25.3.0-devel (git-fb38f2207c)",
+        "fallback": null,
+        "lost": "GPU device lost: simulated (ui.gpu.simulateLoss)",
+        "preference": "vulkan",
+        "present": "native software bitmap",
+        "selected": "vulkan",
+        "videoMemoryMb": null
+      },
+      "cpu": {
+        "samples": [
+          {
+            "endToEndMs": 911.14099999686,
+            "compositeMs": 810.5699999999779,
+            "uploadMs": 17.319000000017695
+          },
+          {
+            "endToEndMs": 895.4039999989618,
+            "compositeMs": 798.3139999999839,
+            "uploadMs": 16.220000000001164
+          },
+          {
+            "endToEndMs": 902.2770000010496,
+            "compositeMs": 801.3740000000107,
+            "uploadMs": 17.304999999993015
+          },
+          {
+            "endToEndMs": 896.4049999995041,
+            "compositeMs": 798.23199999996,
+            "uploadMs": 16.996000000013737
+          },
+          {
+            "endToEndMs": 895.4109999976936,
+            "compositeMs": 798.0470000000205,
+            "uploadMs": 16.350999999966007
+          },
+          {
+            "endToEndMs": 921.1299999988114,
+            "compositeMs": 819.9409999999916,
+            "uploadMs": 17.17599999997765
+          },
+          {
+            "endToEndMs": 913.4630000007746,
+            "compositeMs": 815.7420000000275,
+            "uploadMs": 17.187999999994645
+          },
+          {
+            "endToEndMs": 915.726999999606,
+            "compositeMs": 818.4860000000044,
+            "uploadMs": 15.556000000011409
+          }
+        ],
+        "medianMs": 906.7089999989548,
+        "gpuInfo": {
+          "adapter": "NVIDIA GeForce GTX 1070 (NVK GP104-A)",
+          "backend": "vulkan",
+          "canvas": "cpu",
+          "deviceType": "discreteGpu",
+          "driver": "NVK Mesa 25.3.0-devel (git-fb38f2207c)",
+          "fallback": null,
+          "lost": "GPU device lost: simulated (ui.gpu.simulateLoss)",
+          "preference": "vulkan",
+          "present": "native software bitmap",
+          "selected": "vulkan",
+          "videoMemoryMb": null
+        }
+      },
+      "speedup": 9.31835956579146
+    }
+  },
+  "pixel-parity": {
+    "amd-8": {
+      "crop": [
+        393,
+        451,
+        1033,
+        931
+      ],
+      "mae": 0.0,
+      "max": 0,
+      "within2": 1.0
+    },
+    "amd-16": {
+      "crop": [
+        393,
+        451,
+        1033,
+        931
+      ],
+      "mae": 0.38184244791666666,
+      "max": 1,
+      "within2": 1.0
+    },
+    "amd-32": {
+      "crop": [
+        393,
+        451,
+        1033,
+        931
+      ],
+      "mae": 0.38206922743055555,
+      "max": 1,
+      "within2": 1.0
+    },
+    "nvidia-8": {
+      "crop": [
+        393,
+        451,
+        1033,
+        931
+      ],
+      "mae": 0.0,
+      "max": 0,
+      "within2": 1.0
+    },
+    "nvidia-16": {
+      "crop": [
+        393,
+        451,
+        1033,
+        931
+      ],
+      "mae": 0.3817588975694444,
+      "max": 1,
+      "within2": 1.0
+    },
+    "nvidia-32": {
+      "crop": [
+        393,
+        451,
+        1033,
+        931
+      ],
+      "mae": 0.381982421875,
+      "max": 1,
+      "within2": 1.0
+    }
+  },
+  "native-roundtrip": {
+    "amd-clipboard": {
+      "size": [
+        64,
+        32
+      ],
+      "maxError": 0
+    },
+    "amd-pcraft-8": {
+      "maxError": 0
+    },
+    "amd-pcraft-16": {
+      "maxError": 0
+    },
+    "amd-pcraft-32": {
+      "maxError": 0
+    },
+    "nvidia-clipboard": {
+      "size": [
+        64,
+        32
+      ],
+      "maxError": 0
+    },
+    "nvidia-pcraft-8": {
+      "maxError": 0
+    },
+    "nvidia-pcraft-16": {
+      "maxError": 0
+    },
+    "nvidia-pcraft-32": {
+      "maxError": 0
+    }
+  },
+  "psd-roundtrip": {
+    "amd-8": {
+      "pixelIdentical": false,
+      "maxError": 1
+    },
+    "amd-16": {
+      "pixelIdentical": false,
+      "maxError": 1
+    },
+    "amd-32": {
+      "pixelIdentical": false,
+      "maxError": 1
+    },
+    "nvidia-8": {
+      "pixelIdentical": false,
+      "maxError": 1
+    },
+    "nvidia-16": {
+      "pixelIdentical": false,
+      "maxError": 1
+    },
+    "nvidia-32": {
+      "pixelIdentical": false,
+      "maxError": 1
+    }
+  },
+  "checks": {
+    "native_cap_primitives_tests_per_device": 16,
+    "authentication_and_path_escapes": "passed on both",
+    "native_clipboard": "passed on both; prior clipboard restored",
+    "native_quit_cancel": "passed on both",
+    "native_file_panels": "Open/cancel and Save As/MIME passed on laptop"
+  }
+}

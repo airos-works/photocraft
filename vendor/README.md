@@ -1,0 +1,15 @@
+# Haiku Vulkan support
+
+`wgpu`, `wgpu-core` and `wgpu-core-deps-windows-linux-android` 30.0.1 are copied from crates.io, with their upstream
+MIT/Apache-2.0 licenses. The only changes add `target_os = "haiku"` alongside
+FreeBSD in platform dependency and backend cfg lists (`Cargo.toml`,
+`Cargo.toml.orig`, `build.rs`). This makes their existing Vulkan backend
+available on air/OS. There is no new Vulkan implementation or window surface;
+the native host renders offscreen and presents the completed bitmap.
+
+`cap-primitives` 4.0.3 (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT)
+adds Haiku directory-entry metadata lookup, no-O_PATH handling, signed inode/link
+count conversion, Haiku's signed `st_rdev = -1` sentinel for ordinary files,
+and an explicit unsupported error for O_RSYNC. A target-side regression test
+covers that sentinel (upstream's unsigned conversion panicked). It preserves
+capability-relative traversal and symlink checks; no automation permission is bypassed.

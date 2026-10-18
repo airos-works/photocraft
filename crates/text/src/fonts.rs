@@ -772,6 +772,13 @@ pub(crate) fn system_font_dirs() -> Vec<std::path::PathBuf> {
         if let Some(h) = &home {
             v.push(h.join("Library/Fonts"));
         }
+    } else if cfg!(target_os = "haiku") {
+        v.push(PathBuf::from("/boot/system/data/fonts"));
+        v.push(PathBuf::from("/boot/system/non-packaged/data/fonts"));
+        if let Some(h) = &home {
+            v.push(h.join("config/data/fonts"));
+            v.push(h.join("config/non-packaged/data/fonts"));
+        }
     } else if cfg!(target_os = "windows") {
         let windir = std::env::var_os("WINDIR").map_or_else(|| PathBuf::from("C:\\Windows"), PathBuf::from);
         v.push(windir.join("Fonts"));

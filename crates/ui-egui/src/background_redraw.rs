@@ -219,7 +219,7 @@ fn spawn(
 fn draw(
     doc: &Document,
     display: Option<&CanvasDisplay>,
-    format: eframe::wgpu::TextureFormat,
+    format: wgpu::TextureFormat,
     blocks: &[Rect],
     todo: &[usize],
     stop: &AtomicBool,

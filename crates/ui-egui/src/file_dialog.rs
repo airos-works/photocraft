@@ -68,7 +68,7 @@ impl FileDialogReply {
 
 /// Show a file dialog and return at once, answering through the reply when the user is done.
 /// The window (`None` in tests) is the dialog's parent.
-pub type FileDialogFn = Box<dyn FnMut(FileDialogRequest, Option<&eframe::Frame>, FileDialogReply)>;
+pub type FileDialogFn = Box<dyn FnMut(FileDialogRequest, Option<&crate::integration::Frame>, FileDialogReply)>;
 
 /// What to do with the answer (`None`: cancelled).
 type Then = Box<dyn FnOnce(&mut PhotocraftApp, Option<FileDialogAnswer>) -> Result<Value, String>>;
@@ -273,7 +273,7 @@ impl PhotocraftApp {
 
     /// Called every frame: shows a queued dialog with `parent` (the window) as its parent, and
     /// continues the action that asked once the answer is in. Its errors go to the status bar.
-    pub fn poll_file_dialog(&mut self, ctx: &egui::Context, parent: Option<&eframe::Frame>) {
+    pub fn poll_file_dialog(&mut self, ctx: &egui::Context, parent: Option<&crate::integration::Frame>) {
         let Some(p) = self.file_dialog.as_mut() else { return };
         if let Some(request) = p.request.take() {
             let (tx, rx) = mpsc::channel();

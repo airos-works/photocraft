@@ -70,13 +70,13 @@ pub fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 #[cfg(target_os = "linux")]
-pub fn poll_frame(app: &mut PhotocraftApp, ctx: &egui::Context, frame: &eframe::Frame) {
+pub fn poll_frame(app: &mut PhotocraftApp, ctx: &egui::Context, frame: &crate::integration::Frame) {
     let output_name = frame.winit_window().and_then(|window| window.current_monitor()).and_then(|monitor| monitor.name());
     poll_with_output_name(app, ctx, output_name);
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn poll_frame(app: &mut PhotocraftApp, ctx: &egui::Context, _frame: &eframe::Frame) {
+pub fn poll_frame(app: &mut PhotocraftApp, ctx: &egui::Context, _frame: &crate::integration::Frame) {
     poll(app, ctx);
 }
 

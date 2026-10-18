@@ -109,6 +109,7 @@ pub mod hold_keys;
 pub mod i18n;
 mod icon_data;
 pub mod icons;
+pub mod integration;
 pub mod jobs_ui;
 pub mod kys_import;
 pub mod lasso_ui;
@@ -993,7 +994,7 @@ impl PhotocraftApp {
 
     /// Draw the document canvas on the GPU (custom WGSL shader) instead of via egui textures.
     /// Call from the app creator with `cc.wgpu_render_state`; without it the CPU path is used.
-    pub fn set_wgpu(&mut self, rs: eframe::egui_wgpu::RenderState) {
+    pub fn set_wgpu(&mut self, rs: egui_wgpu::RenderState) {
         // Preferences › Performance › cache tile size (PHOTOCRAFT_GPU_TILE still overrides).
         let tile = self.session.prefs().performance.cache_tile_size;
         // Escaped driver/setup panics must leave the session and CPU canvas alive.
@@ -1857,14 +1858,14 @@ impl PhotocraftApp {
     }
 }
 
-impl eframe::App for PhotocraftApp {
-    fn on_exit(&mut self) {
+impl PhotocraftApp {
+    pub fn frame_exit(&mut self) {
         if let Err(err) = tool_memory::save_on_exit(self) {
             log::warn!("Preferences: could not save the final tool selection: {err}");
         }
     }
 
-    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    pub fn frame_logic(&mut self, ctx: &egui::Context, frame: &mut integration::Frame) {
         self.cap_frame_rate();
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
@@ -1956,7 +1957,7 @@ impl eframe::App for PhotocraftApp {
         self.poll_file_dialog(ctx, Some(frame));
     }
 
-    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    pub fn frame_input(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let frame_start = gpu_canvas::now_ms();
         // An undecorated window gets its caption back when the toolkit changes its flags
         // (maximize, restore, …): take it off again before the frame is laid out (#2246).
@@ -1988,7 +1989,7 @@ impl eframe::App for PhotocraftApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+    pub fn frame_ui(&mut self, ui: &mut egui::Ui, frame: &mut integration::Frame) {
         let ctx = ui.ctx().clone();
         self.hover_layer = None;
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
@@ -3117,3 +3118,19 @@ mod channel_tint_tests {
 
 #[cfg(test)]
 mod options_hit_area_tests;
+
+#[cfg(not(target_os = "haiku"))]
+impl eframe::App for PhotocraftApp {
+    fn on_exit(&mut self) {
+        self.frame_exit();
+    }
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.frame_logic(ctx, frame);
+    }
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.frame_input(ctx, raw);
+    }
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.frame_ui(ui, frame);
+    }
+}

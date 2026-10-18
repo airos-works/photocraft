@@ -157,3 +157,9 @@ If the field has a PSD equivalent, map it in `crates/io` too, and keep unknown P
   GitHub profiles). Never hand-edit `contributors.json`.
 - Maintainers refresh the stats with `python3 ../../craftrules/scripts/contributors.py .` (it also
   re-verifies who wrote each `people.toml` entry; `--check` only verifies).
+
+## air/OS fork
+The user-authorized port reuses the sibling Be API hosts. The app-only native boundary
+`apps/photocraft-haiku/native/host.cpp` and documented unsafe wrappers in `src/host.rs`
+are permitted for operating-system integration. Engine and UI crates still forbid unsafe.
+Do not replace the editor or its depth-aware GPU compositor with a reduced implementation.
