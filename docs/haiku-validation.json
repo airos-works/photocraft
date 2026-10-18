@@ -449,6 +449,139 @@
     "authentication_and_path_escapes": "passed on both",
     "native_clipboard": "passed on both; prior clipboard restored",
     "native_quit_cancel": "passed on both",
-    "native_file_panels": "Open/cancel and Save As/MIME passed on laptop"
+    "native_file_panels": "Open/cancel and Save As/MIME passed on laptop",
+    "installed_package": "GPU rendering, layered open/save, source version and native metadata verified on both",
+    "native_document_refs": "Roster B_REFS_RECEIVED cold launch opened the PSD on both; native title verified",
+    "nvidia_launcher": "photocraft-nvidia opened the PSD with NVK and no control server"
+  },
+  "startup_without_driver": {
+    "amd": {
+      "gpuInfo": {
+        "adapter": "",
+        "backend": "software",
+        "canvas": "cpu",
+        "deviceType": "cpu",
+        "driver": "",
+        "fallback": "Adapter selection failed: No hardware Vulkan adapter; using software rendering",
+        "lost": null,
+        "preference": "vulkan",
+        "present": "native software bitmap",
+        "selected": "auto",
+        "videoMemoryMb": null
+      },
+      "document_saved": true,
+      "screenshot_completed": true
+    },
+    "nvidia": {
+      "gpuInfo": {
+        "adapter": "",
+        "backend": "software",
+        "canvas": "cpu",
+        "deviceType": "cpu",
+        "driver": "",
+        "fallback": "Adapter selection failed: No hardware Vulkan adapter; using software rendering",
+        "lost": null,
+        "preference": "vulkan",
+        "present": "native software bitmap",
+        "selected": "auto",
+        "videoMemoryMb": null
+      },
+      "document_saved": true,
+      "screenshot_completed": true
+    }
+  },
+  "release": {
+    "version": "0.10.0~airos1-2",
+    "source_commit": "cbe6d62e62d4dcc7da28d5c35907bd4d870ae295",
+    "package_sha256": "2db133f4c3c92e9bcda87016dd66e74df572ad426ba6fd76327d0abcf80210f3",
+    "bytes": 27993407,
+    "installed_on": [
+      "amd",
+      "nvidia"
+    ],
+    "gpu": {
+      "amd": {
+        "adapter": "AMD Radeon 760M Graphics (RADV PHOENIX)",
+        "backend": "vulkan",
+        "canvas": "gpu",
+        "deviceType": "integratedGpu",
+        "driver": "radv Mesa 25.3.6 (git-006c0504b9)",
+        "fallback": null,
+        "lost": null,
+        "preference": "vulkan",
+        "present": "native bitmap readback",
+        "selected": "auto",
+        "videoMemoryMb": null
+      },
+      "nvidia": {
+        "adapter": "NVIDIA GeForce GTX 1070 (NVK GP104-A)",
+        "backend": "vulkan",
+        "canvas": "gpu",
+        "deviceType": "discreteGpu",
+        "driver": "NVK Mesa 25.3.0-devel (git-fb38f2207c)",
+        "fallback": null,
+        "lost": null,
+        "preference": "vulkan",
+        "present": "native bitmap readback",
+        "selected": "auto",
+        "videoMemoryMb": null
+      }
+    }
+  },
+  "benchmark_binary_sha256": "2d90991d66ac92704fa5c80432b8b5e0f588c99b3e043fdd2e6ec5cf929cea63",
+  "local_gates": {
+    "ui_unit_and_integration": {
+      "harnesses": 27,
+      "passed": 3144,
+      "failed": 0,
+      "ignored": 13
+    },
+    "text": {
+      "passed": 160,
+      "ignored": 4
+    },
+    "native_host": {
+      "passed": 10
+    },
+    "clippy_linux_affected_crates": "passed",
+    "clippy_haiku_host_no_deps": "passed",
+    "wasm_l0_l6": "passed",
+    "layering_32_crates": "passed",
+    "corpus": {
+      "harnesses": 175,
+      "passed": 3805,
+      "failed": 0,
+      "ignored": 27
+    },
+    "quick_performance": {
+      "status": "completed successfully",
+      "adapter": "llvmpipe (LLVM 21.1.8, 256 bits)",
+      "benchmarks": {
+        "bevel_bench": {
+          "status": "ok",
+          "seconds": 9.029955697
+        },
+        "camera_raw_bench": {
+          "status": "ok",
+          "seconds": 2.329962031
+        },
+        "layout_bench": {
+          "status": "ok",
+          "seconds": 286.75019719
+        },
+        "perf_scenarios": {
+          "status": "ok",
+          "seconds": 49.390292274
+        },
+        "type_bench": {
+          "status": "ok",
+          "seconds": 0.509627277
+        }
+      },
+      "failures": [],
+      "baseline_note": "baseline is from machine class `macos-aarch64-apple-m4-pro-apple-m4-pro`, this is `linux-x86-64-intel-r-xeon-r-cpu-e5-2650-v4-2-20ghz-llvmpipe-llvm-21-1-8-256-bits`: regression check skipped",
+      "budgets_applied": false,
+      "note": "Quick mode compatibility run on software Vulkan. Real AMD/NVIDIA measurements are recorded separately."
+    }
   }
 }

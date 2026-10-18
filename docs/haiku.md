@@ -32,7 +32,10 @@ ICD for this process with `VK_ICD_FILENAMES=/path/to/icd.json`.
 On the validation X399, the system manifests pointed to AMD despite its NVIDIA
 card. Validation used a private NVK runtime under
 `/boot/home/PhotoCraft-validation/runtime` and the `nvk.json` manifest there.
-No system-wide Vulkan configuration was changed. Its library SHA-256 is
+The installed `photocraft-nvidia` command in
+`/boot/home/config/non-packaged/bin` launches PhotoCraft with that private ICD;
+it forwards file arguments. No system-wide Vulkan configuration was changed.
+Its library SHA-256 is
 `00aeaee9cb7c9f8aaf481433fce4fefb96f4e6ad7425f010aed9a7a95855b09d`.
 
 ## Build and package
@@ -104,9 +107,15 @@ adjustment with its mask. Its GPU canvas pixels matched the CPU export exactly
 at 8 bits; at 16 and 32 bits, maximum displayed-channel error was 1/255.
 `.pcraft` save/reopen exports were pixel-identical at all three depths. PSD
 round trips preserved all four layers and depth, with maximum export error 1/255.
+The final installed package (`0.10.0~airos1-2`, source `cbe6d62e6`) passed
+GPU rendering and layered open/save checks on both devices. Cold native
+document-ref launches opened the PSD on both, with the expected window title.
+
 Native bitmap clipboard paste was pixel-exact, and copied images advertised both
 PNG and native bitmap formats. Both devices passed authentication, path-escape,
-unsaved-quit cancellation, and GPU-loss/edit/save checks.
+unsaved-quit cancellation, and GPU-loss/edit/save checks. With a missing Vulkan
+ICD, auto mode also opened, edited, saved and captured a frame in software on
+both devices.
 
 The 24 MP benchmark uses three layers, two warmups and eight measured opacity
 changes. Each sample measures a command through the next UI frame on the same
@@ -123,9 +132,15 @@ on the laptop. The metadata dependency's 16 unit tests also passed on both
 Haiku devices. Structured rendering/round-trip/benchmark evidence is in
 [`haiku-validation.json`](haiku-validation.json).
 
-Local gates passed: 3,034 editor UI tests (13 ignored), 160 text tests (4 ignored),
-10 native-host raster/input tests, Linux clippy on the affected crates, native
+Local gates passed: 3,144 editor UI unit/integration tests (13 ignored), 160 text
+tests (4 ignored), 10 native-host raster/input tests, Linux clippy on the affected crates, native
 host clippy, all L0–L6 WebAssembly checks and the 32-crate layering check.
 The native clippy invocation uses `--no-deps`; without it Rust 1.99 reports a
 false positive in an unchanged dependency's already-const thread-local initializer.
-Full corpus and quick-performance gates are still being completed before release.
+The full corpus gate passed 3,805 tests (27 ignored). All five quick-performance
+programs completed successfully on Linux/llvmpipe. Quick mode does not apply
+full-size budgets, and the regression comparison was skipped because upstream
+records its baseline on a different machine class (Apple M4 Pro). These host
+checks are separate from the real AMD/NVIDIA measurements above. Details are in
+the fork's
+[release validation record](https://github.com/jmgasper/photocraft/blob/main/docs/haiku-validation.json).

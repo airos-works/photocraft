@@ -13,3 +13,17 @@ count conversion, Haiku's signed `st_rdev = -1` sentinel for ordinary files,
 and an explicit unsupported error for O_RSYNC. A target-side regression test
 covers that sentinel (upstream's unsigned conversion panicked). It preserves
 capability-relative traversal and symlink checks; no automation permission is bypassed.
+
+The `cap-tempfile = "4"` development dependency is restored so the published
+crate's native tests can run. Its upstream path-only entry was omitted from the
+crates.io manifest. From the repository root, build the target test executable:
+
+```sh
+. tools/haiku/env.sh
+cargo test --manifest-path vendor/cap-primitives/Cargo.toml \
+  --config "patch.crates-io.cap-primitives.path=\"$PWD/vendor/cap-primitives\"" \
+  --release --target x86_64-unknown-haiku -Zbuild-std=std,panic_abort --lib --no-run
+```
+
+Run the resulting `cap_primitives-*` executable on Haiku; all 16 tests passed on
+both validation machines.
