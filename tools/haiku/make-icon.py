@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Original landscape-frame icon, MIT OR Apache-2.0; no third-party artwork."""
-from pathlib import Path
-import hvif
-icon = {'styles': [{'color': hvif.hex_color(c)} for c in ['#2F7BF5', '#EFE9DC', '#0B253E', '#E9AE38']], 'paths': [], 'shapes': []}
-def shape(style, points):
-    n = len(icon['paths'])
-    icon['paths'].append({'closed': True, 'points': points})
-    icon['shapes'].append({'style': style, 'paths': [n]})
-shape(0, [(4,4),(60,4),(60,60),(4,60)])
-shape(1, [(10,12),(54,12),(54,52),(10,52)])
-shape(0, [(14,16),(50,16),(50,48),(14,48)])
-shape(2, [(14,44),(25,29),(34,40),(41,32),(50,43),(50,48),(14,48)])
-shape(3, [(38,20),(44,20),(44,26),(38,26)])
-out = Path(__file__).resolve().parents[2] / 'apps/photocraft-haiku/resources/PhotoCraft.hvif'
-out.write_bytes(hvif.encode(icon))
+"""Original Haiku landscape print and paintbrush (MIT OR Apache-2.0)."""
+from icon_art import Drawing, INK, plane
+
+d = Drawing()
+p = plane(6, 7, 0.3)
+d.shadow([(6,44),(45,56),(62,56),(30,44)])
+d.shape([(45,19),(49,15),(49,52),(45,56)], d.gradient('acb5bd','657184'), INK)
+d.shape(p([(0,0),(39,0),(39,37),(0,37)]), d.gradient('fffff7','d6dbdf'), INK)
+d.shape(p([(4,4),(35,4),(35,28),(4,28)]), d.gradient('bedfe9','659dc3', (10,12),(42,45)))
+d.ellipse(31, 26, 4, 4, d.gradient('fff4b4','e4b95c'))
+d.shape(p([(4,24),(13,12),(23,26),(29,19),(35,25),(35,29),(4,29)]), d.gradient('90b39a','3b6b60'))
+d.shape(p([(4,28),(18,21),(28,29),(35,26),(35,31),(4,31)]), d.gradient('78a49c','3d6b70'))
+# Brush handle and ferrule; broad bristles identify editing rather than viewing.
+d.shape([(36,43),(51,15),(55,13),(57,17),(43,47)], d.gradient('e6b998','a76442'), INK, 1.8)
+d.shape([(35,43),(41,36),(47,40),(43,48)], d.gradient('f4f5e9','9eaeb9'), INK, 1.5)
+d.shape([((35,43),(35,43),(30,45)), ((29,55),(30,51),(28,57)),
+         ((42,49),(37,57),(44,46)), (43,48)], d.gradient('a8b6dc','475b8e'), INK, 1.8)
+d.line([(33,51),(36,47)], 'dce6fa', 1.5)
+d.save(__file__, 'photocraft', 'PhotoCraft')

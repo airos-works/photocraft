@@ -1,5 +1,7 @@
 # PhotoCraft roadmap
 
+**air/OS icon update, 2026-10-26:** original Haiku-style native vector icon, with reproducible HVIF/SVG generation and a package revision bump. Validated with Haiku resource compilation and native renders from 16 to 256px; see [native icon](docs/haiku.md#native-application-icon-2026-10-26).
+
 **Stage: alpha** · next: beta, ~30 points (ready for real work ~45% → ~75%, with reliable PSD) and ~1,100–1,800 h away
 
 > **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (oracle floor 145 of 258 and 953 open issues, as in gaps.md and on GitHub; toolbox count 56 of 68, 12 missing) · **Target:** Adobe Photoshop 2026
