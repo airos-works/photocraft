@@ -194,9 +194,9 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         }) as photocraft_ui_egui::AutomationCommandFn
     });
     Services {
-        import: Some(Box::new(|name: &str, bytes: &[u8], max_svg_group_depth: usize| {
+        import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
             crate::crash_guard::guard("Open", || {
-                photocraft_io::import_with_svg_group_depth(name, bytes, max_svg_group_depth).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
             })
         })),
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
@@ -228,10 +228,11 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             let png = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &EncodeOptions::default()).map_err(|e| e.to_string())?;
             host::clipboard_set_picture("image/png", &png).then_some(()).ok_or_else(|| "Clipboard unavailable".into())
         })),
+        // No PNG on the clipboard is no image; one that doesn't decode is an error.
         clipboard_get_image: Some(Box::new(|| {
-            let bytes = host::clipboard_get("image/png")?;
-            let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?.to_rgba8();
-            Some((img.width(), img.height(), img.into_raw()))
+            let Some(bytes) = host::clipboard_get("image/png") else { return Ok(None) };
+            let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).map_err(|e| e.to_string())?.to_rgba8();
+            Ok(Some((img.width(), img.height(), img.into_raw())))
         })),
         load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
         save_prefs: Some(Box::new(|text: &str| write_atomic(&prefs_file().ok_or("no config directory")?, text.as_bytes()))),

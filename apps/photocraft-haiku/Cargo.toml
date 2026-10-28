@@ -28,6 +28,8 @@ photocraft-automation.workspace = true
 egui.workspace = true
 serde_json.workspace = true
 log.workspace = true
+# The desktop app's logging.rs (shared by path) formats its timestamps with chrono.
+chrono.workspace = true
 rayon.workspace = true
 image = { workspace = true, features = ["png"] }
 

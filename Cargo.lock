@@ -5227,6 +5227,7 @@ name = "photocraft-haiku"
 version = "0.17.0"
 dependencies = [
  "cc",
+ "chrono",
  "egui",
  "egui-wgpu",
  "image",

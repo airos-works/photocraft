@@ -39,7 +39,7 @@ pub struct Shell {
     repaint_at: Option<Instant>,
     /// When other threads asked for one (`request_repaint` from a worker).
     woken_for: Arc<Mutex<Option<Instant>>>,
-    screenshots: Vec<egui::UserData>,
+    screenshots: Vec<egui::ScreenshotCallback>,
     title: String,
 }
 
@@ -266,6 +266,8 @@ impl Shell {
                     delta: vec2(-ev.dx, -ev.dy),
                     phase: egui::TouchPhase::Move,
                     modifiers: self.modifiers,
+                    // B_MOUSE_WHEEL_CHANGED doesn't say whether a wheel or a touchpad sent it.
+                    source: egui::MouseWheelSource::Unknown,
                 });
             }
             kind::KEY_DOWN | kind::KEY_UP => self.key(ev.kind == kind::KEY_DOWN, ev.key, ev.raw_char, ev.modifiers, &text),
@@ -411,6 +413,8 @@ impl Shell {
                     }
                 }
                 egui::OutputCommand::CopyImage(img) => copy_image(img),
+                // Haiku has no PRIMARY selection (X11/Wayland middle-click paste).
+                egui::OutputCommand::TextSelectionSettled(_) => {}
                 egui::OutputCommand::OpenUrl(u) => {
                     if !host::open_url(&u.url) {
                         log::warn!(target: "photocraft_haiku", "couldn't open {}", u.url);
@@ -484,9 +488,9 @@ impl Shell {
         // Applied: epaint checks (in debug builds) that no texture update is dropped unhandled.
         out.textures_delta.clear();
         if !self.gpu_health.as_ref().is_some_and(|h| h.fault().is_some()) {
-            for user_data in std::mem::take(&mut self.screenshots) {
+            for callback in std::mem::take(&mut self.screenshots) {
                 let image = Arc::new(self.gpu.as_ref().map_or_else(|| self.raster.image(), |g| g.image()));
-                self.events.push(Event::Screenshot { viewport_id: ViewportId::ROOT, user_data, image });
+                callback.complete(image);
                 delay = Duration::ZERO;
             }
         } else {
