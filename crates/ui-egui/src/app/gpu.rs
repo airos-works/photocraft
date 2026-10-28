@@ -50,6 +50,13 @@ impl PhotocraftApp {
         self.window_device = Some((device.clone(), photocraft_gpu::DeviceHealth::watch(device)));
     }
 
+    /// Stop watching the window's device, for a host that keeps drawing the window without it:
+    /// the air/OS host presents through its software rasterizer after a GPU fault, so a loss
+    /// switches to the CPU there instead of saving for recovery and closing (`check_window`).
+    pub fn forget_window_device(&mut self) {
+        self.window_device = None;
+    }
+
     /// Whether the window's graphics device was lost, so the app saves its documents for
     /// recovery and closes once they are saved (#3438).
     pub fn window_lost(&self) -> bool {

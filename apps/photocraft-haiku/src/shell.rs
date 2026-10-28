@@ -107,6 +107,9 @@ impl Shell {
             match crate::crash_guard::guard("GPU startup", crate::gpu::Gpu::new) {
                 Ok(gpu) => {
                     app.set_wgpu(gpu.state.clone());
+                    // A device fault falls back to the software rasterizer (`frame`), so the
+                    // window never becomes undrawable: don't let the editor close the app for it.
+                    app.forget_window_device();
                     if app.gpu_active() {
                         Some(gpu)
                     } else if mode == "vulkan" {
