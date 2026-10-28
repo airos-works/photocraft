@@ -32,7 +32,14 @@ pub fn read_file_with(path: &Path, chunk: usize) -> io::Result<Vec<u8>> {
         if !metadata.is_file() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "path is not a regular file"));
         }
-        rustix::fs::fcntl_setfl(&f, OFlags::empty()).map_err(io::Error::from)?;
+        // Haiku's packagefs (read-only system files) has no set_flags hook and answers
+        // B_UNSUPPORTED. O_NONBLOCK means nothing for the regular file this now is, so it can
+        // stay set.
+        match rustix::fs::fcntl_setfl(&f, OFlags::empty()) {
+            #[cfg(target_os = "haiku")]
+            Err(e) if e.raw_os_error() == i32::MIN + 0x600e || e == rustix::io::Errno::OPNOTSUPP => {}
+            r => r.map_err(io::Error::from)?,
+        }
         (f, metadata)
     };
     #[cfg(not(unix))]
