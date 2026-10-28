@@ -33,7 +33,7 @@ image = { workspace = true, features = ["png"] }
 
 [target.'cfg(target_os = "haiku")'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "vulkan"] }
-egui-wgpu = { version = "0.36", default-features = false }
+egui-wgpu = { version = "0.37", default-features = false }
 pollster = "1"
 
 [build-dependencies]
