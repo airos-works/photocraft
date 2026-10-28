@@ -1,5 +1,5 @@
 name photocraft
-version 0.10.0~airos1-3
+version 0.17.0~airos1-1
 architecture x86_64
 summary "Layered photo and image editor"
 description "PhotoCraft for air/OS: the Rust image editor with native windows, file panels and clipboard; Vulkan rendering on supported hardware and a software fallback."
@@ -9,8 +9,8 @@ copyrights { "2026 PhotoCraft contributors" }
 licenses { "MIT" "Apache v2" }
 urls { "https://github.com/jmgasper/photocraft" }
 provides {
-    photocraft = 0.10.0
-    app:PhotoCraft = 0.10.0
+    photocraft = 0.17.0
+    app:PhotoCraft = 0.17.0
 }
 requires {
     haiku >= r1~beta6

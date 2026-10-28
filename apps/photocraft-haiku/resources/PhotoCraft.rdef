@@ -3,8 +3,8 @@ resource app_signature "application/x-vnd.storytold-PhotoCraft";
 resource(2, "BEOS:TYPE") #'MIMS' "application/x-vnd.Be-elfexecutable";
 resource app_flags B_MULTIPLE_LAUNCH;
 resource app_version {
-    major = 0, middle = 10, minor = 0, variety = B_APPV_DEVELOPMENT, internal = 1,
-    short_info = "PhotoCraft 0.10.0",
+    major = 0, middle = 17, minor = 0, variety = B_APPV_DEVELOPMENT, internal = 1,
+    short_info = "PhotoCraft 0.17.0",
     long_info = "PhotoCraft image editor for air/OS (MIT or Apache-2.0)."
 };
 resource vector_icon { import "PhotoCraft.hvif" };

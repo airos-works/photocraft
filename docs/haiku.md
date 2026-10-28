@@ -1,6 +1,6 @@
 # PhotoCraft on air/OS
 
-This independent fork of PhotoCraft 0.10.0 (upstream `8d2e615ab93d`) runs the full
+This independent fork of PhotoCraft 0.17.0 (upstream `69b8fd9c14b2`) runs the full
 Rust editor on air/OS / Haiku x86_64. It retains the document engine, layers,
 brushes, masks, adjustments, codecs, colour management, 8/16/32-bit documents,
 recovery, preferences and authenticated automation. The native Be API host,
@@ -52,8 +52,8 @@ unwinding stays enabled. `tools/haiku/env.sh` supplies the workspace defaults fo
 these can be overridden. The packaging script also accepts `HAIKU_HOST_TOOLS`
 for Haiku's Linux-hosted resource compiler and package tools.
 
-Output: `artifacts/haiku/photocraft-0.10.0~airos1-2-x86_64.hpkg`. Install on the
-target with `pkgman install /path/to/photocraft-0.10.0~airos1-2-x86_64.hpkg`.
+Output: `artifacts/haiku/photocraft-0.17.0~airos1-1-x86_64.hpkg`. Install on the
+target with `pkgman install /path/to/photocraft-0.17.0~airos1-1-x86_64.hpkg`.
 PhotoCraft appears in Deskbar's Applications menu and at
 `/boot/system/apps/PhotoCraft`. Its native icon and executable MIME attributes
 are embedded in the package. Existing preferred applications are preserved.
@@ -101,6 +101,9 @@ The native clipboard/key probes under `tools/haiku/` exercise Be API integration
 
 ## Hardware results — 18 October 2026
 
+These results, and [`haiku-validation.json`](haiku-validation.json), are for PhotoCraft
+0.10.0 (`0.10.0~airos1-2`). They have not been repeated since the 0.17.0 merge below.
+
 Both GPUs rendered the full editor at 1.75× density. The layered 640×480 fixture
 contains a soft brush stroke, a Multiply layer and a brightness/contrast
 adjustment with its mask. Its GPU canvas pixels matched the CPU export exactly
@@ -144,6 +147,24 @@ records its baseline on a different machine class (Apple M4 Pro). These host
 checks are separate from the real AMD/NVIDIA measurements above. Details are in
 the fork's
 [release validation record](https://github.com/jmgasper/photocraft/blob/main/docs/haiku-validation.json).
+
+## Upstream 0.17.0 merge (2026-10-29)
+
+Upstream `69b8fd9c14b2` was merged (not rebased) into this fork's `main`. Upstream moved the canvas
+modules under `crates/ui-egui/src/canvas/`, split the application into `src/app/`, and moved to
+its own egui 0.37 and winit forks (`[patch.crates-io]`). The air/OS changes follow it:
+
+- `photocraft-ui-egui` uses `wgpu` and `egui-wgpu` directly and depends on `eframe` only off
+  air/OS. `eframe::App` delegates to `frame_exit`, `frame_logic`, `frame_input` and `frame_ui`,
+  which the native host calls with `integration::Frame`.
+- Upstream still locks wgpu 30.0.1 and cap-primitives 4.0.3, so the vendored copies and their
+  patches are unchanged. They sit beside upstream's egui and winit patches.
+- Upstream now saves recovery and closes the app when the window's GPU device is lost (#3438).
+  The air/OS host keeps its software fallback instead: it calls `forget_window_device` after
+  `set_wgpu`, so a fault (including `ui.gpu.simulateLoss`) switches the canvas and window to CPU.
+- egui 0.37 delivers screenshots via `ScreenshotCallback`, and wheel events carry a
+  `MouseWheelSource` (`Unknown`: Haiku doesn't say what sent them). Import takes
+  `ImportOptions`, and the clipboard image reader returns `Result<Option<_>>`.
 
 ## Native application icon (2026-10-26)
 
