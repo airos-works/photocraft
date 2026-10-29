@@ -1,4 +1,6 @@
-//! PhotoCraft's full editor hosted by the native Be API.
+//! PhotoCraft's full editor hosted by the native Be API: a `BApplication` and a `BWindow` per egui
+//! viewport (`native/host.cpp`, `viewports`, `platform`): the main window, and the floating
+//! panels', documents' and dialogs' own windows the desktop app opens.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![cfg_attr(not(target_os = "haiku"), allow(dead_code))]
 #[cfg(target_os = "haiku")]
@@ -19,6 +21,8 @@ mod keys;
 mod logging;
 mod native_menu;
 #[cfg(target_os = "haiku")]
+mod platform;
+#[cfg(target_os = "haiku")]
 mod present;
 mod raster;
 #[cfg(target_os = "haiku")]
@@ -28,6 +32,7 @@ mod services;
 #[cfg(target_os = "haiku")]
 mod shell;
 mod tablet;
+mod viewports;
 
 #[cfg(not(target_os = "haiku"))]
 fn main() {
@@ -110,20 +115,28 @@ fn native_main() -> Result<(), String> {
         log::warn!(target: "photocraft_haiku", "Worker pool: {e}");
     }
     let scale = host::ui_scale();
-    host::open_window(&host::WindowSpec {
+    // The main window opens before the interface starts, so it shows at once.
+    let root = host::open_window(&host::WindowSpec {
         title: "PhotoCraft".into(),
         position: None,
         size: [1440.0 * scale, 900.0 * scale],
-        min_size: [640.0 * scale, 420.0 * scale],
+        min_size: Some([640.0 * scale, 420.0 * scale]),
+        max_size: None,
+        decorations: true,
+        resizable: true,
+        visible: true,
         zoomed: false,
-    });
+        fullscreen: false,
+        floating: false,
+        buttons: [true; 3],
+    })
+    .ok_or("couldn't open the window")?;
     let worker = std::thread::Builder::new()
         .name("PhotoCraft interface".into())
         .stack_size(16 << 20)
         .spawn(move || {
             let result = crash_guard::guard("Interface", || {
                 let ctx = egui::Context::default();
-                ctx.set_embed_viewports(true);
                 let mut services = services::native(automation);
                 services.preset_store = services::config_dir().map(|d| photocraft_engine::preset_store::open_dir_async(d.join("Presets")));
                 let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
@@ -138,7 +151,7 @@ fn native_main() -> Result<(), String> {
                         app.open_failed(&path, &e);
                     }
                 }
-                let mut shell = shell::Shell::new(app, ctx, scale)?;
+                let mut shell = shell::Shell::new(app, ctx, root, scale)?;
                 shell.run();
                 shell.finish();
                 Ok(())

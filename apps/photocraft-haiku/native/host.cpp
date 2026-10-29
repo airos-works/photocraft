@@ -1,16 +1,17 @@
 /*
- * PhotoCraft's air/OS (Haiku) host: the application, its window and the system
- * services the Rust side reaches through the C functions at the end of this
- * file (bound in src/host.rs).
+ * PhotoCraft's air/OS (Haiku) host: the application, its windows (one per egui
+ * viewport: the main window and the floating panels' and documents' own) and
+ * the system services the Rust side reaches through the C functions at the end
+ * of this file (bound in src/host.rs).
  *
  * Threads: be_app runs its message loop on the process's main thread
- * (pc_host_run), the window on its own looper thread, and the Rust interface
- * on a thread of its own. Input arrives in the window thread and is queued
- * here for the Rust thread, which waits on the queue between frames
- * (pc_host_wait) and hands back finished frames as 32-bit BGRA pixels
- * (pc_host_present), or puts them straight into the screen itself (the window
- * is a direct window; src/present.rs). Every call from the Rust thread that
- * touches the window locks it first.
+ * (pc_host_run), each window on its own looper thread, and the Rust interface
+ * on a thread of its own. Input arrives in the window threads and is queued
+ * here, tagged with its window's id, for the Rust thread, which waits on the
+ * queue between frames (pc_host_wait) and hands back finished frames as 32-bit
+ * BGRA pixels (pc_host_present), or puts them straight into the screen itself
+ * (the windows are direct windows; src/present.rs). Every call from the Rust
+ * thread that touches a window locks it first.
  */
 
 #include <Alert.h>
@@ -62,6 +63,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -72,6 +74,9 @@ extern "C" {
 // Keep in step with `Event` in src/host.rs.
 struct PcEvent {
 	int32_t kind;
+	// The window it happened in (pc_host_open_window's id); 0 for the
+	// application's own events.
+	int32_t window;
 	int32_t buttons;
 	int32_t clicks;
 	uint32_t modifiers;
@@ -100,11 +105,13 @@ struct PcEvent {
 struct PcWindowInfo {
 	float inner_left, inner_top, inner_right, inner_bottom;
 	float outer_left, outer_top, outer_right, outer_bottom;
-	float screen_width, screen_height;
+	// The monitor most of the window is on: its frame, edges excluded.
+	float monitor_left, monitor_top, monitor_right, monitor_bottom;
 	int32_t minimized;
 	int32_t active;
 	int32_t zoomed;
 	int32_t fullscreen;
+	int32_t hidden;
 };
 
 }
@@ -159,19 +166,15 @@ static bool sWoken = false;
 // The text of the event pc_host_next_event returned last.
 static std::string sCurrentText;
 static volatile bool sAllowQuit = false;
-static bool sFullscreen = false;
-static BRect sWindowedFrame;
-// Where the canvas view starts in the window (below the native menu bar),
-// logical pixels; read by the direct daemon thread without the window lock.
-static std::atomic<int32_t> sViewTop(0);
 
 
 static PcEvent
-MakeEvent(int32_t kind)
+MakeEvent(int32_t kind, int32_t window = 0)
 {
 	PcEvent event;
 	memset(&event, 0, sizeof(event));
 	event.kind = kind;
+	event.window = window;
 	event.modifiers = modifiers();
 	event.subtype = -1;
 	return event;
@@ -187,6 +190,7 @@ Push(const PcEvent& event, const std::string& text = std::string())
 		// sample counts (its pressure along the stroke).
 		if (event.kind == PC_MOUSE_MOVED && event.tablet != 1 && !sQueue.empty()
 			&& sQueue.back().event.kind == PC_MOUSE_MOVED
+			&& sQueue.back().event.window == event.window
 			&& sQueue.back().event.tablet != 1
 			&& sQueue.back().event.buttons == event.buttons) {
 			sQueue.back().event = event;
@@ -243,18 +247,10 @@ typedef struct {
 	const int32_t* rects;
 } PcDirect;
 
-typedef void (*PcDirectSink)(const PcDirect* direct);
+// Called with the window's id and its direct connection (src/host.rs).
+typedef void (*PcDirectSink)(int32_t window, const PcDirect* direct);
 
 static const uint32 kMaxDirectRects = 256;
-
-// The window's last direct connection and where it is reported to (the
-// presenter, src/present.rs). The sink is called with sDirectLock held, so
-// unsetting it waits for a report in progress.
-static std::mutex sDirectLock;
-static PcDirectSink sDirectSink = NULL;
-static PcDirect sDirect;
-static bool sDirectReported = false;
-static int32_t sDirectRects[kMaxDirectRects * 4];
 
 
 // Frames go straight into the screen only when PHOTOCRAFT_PRESENT=direct asks for
@@ -307,13 +303,27 @@ ReadTablet(const BMessage* message, PcEvent& event)
 // #pragma mark - Canvas view
 
 
+// Edges a window resize drag moves (pc_host_window_command 13); none moves
+// the whole window (12).
+enum {
+	PC_EDGE_LEFT = 1,
+	PC_EDGE_RIGHT = 2,
+	PC_EDGE_TOP = 4,
+	PC_EDGE_BOTTOM = 8,
+};
+
+
 class PcView : public BView {
 public:
-	PcView(BRect frame)
+	PcView(BRect frame, int32 id)
 		:
 		BView(frame, "canvas", B_FOLLOW_ALL_SIDES, B_WILL_DRAW | B_FRAME_EVENTS),
+		fId(id),
 		fBitmap(NULL),
-		fScale(1)
+		fScale(1),
+		fCursor(-1),
+		fDragging(false),
+		fDragEdges(0)
 	{
 		SetViewColor(B_TRANSPARENT_COLOR);
 		SetDrawingMode(B_OP_COPY);
@@ -355,7 +365,7 @@ public:
 	virtual void MouseDown(BPoint where)
 	{
 		MakeFocus(true);
-		PcEvent event = MakeEvent(PC_MOUSE_DOWN);
+		PcEvent event = MakeEvent(PC_MOUSE_DOWN, fId);
 		event.x = where.x;
 		event.y = where.y;
 		BMessage* message = Window()->CurrentMessage();
@@ -364,6 +374,7 @@ public:
 			message->FindInt32("clicks", &event.clicks);
 		}
 		ReadTablet(message, event);
+		Track(message, where, event.buttons);
 		// A mouse drag needs only the latest position; a pen's stroke wants
 		// every sample, each with its pressure.
 		SetMouseEventMask(B_POINTER_EVENTS,
@@ -373,12 +384,14 @@ public:
 
 	virtual void MouseUp(BPoint where)
 	{
-		PcEvent event = MakeEvent(PC_MOUSE_UP);
+		fDragging = false;
+		PcEvent event = MakeEvent(PC_MOUSE_UP, fId);
 		event.x = where.x;
 		event.y = where.y;
 		BMessage* message = Window()->CurrentMessage();
 		if (message != NULL)
 			message->FindInt32("buttons", &event.buttons);
+		Track(message, where, event.buttons);
 		ReadTablet(message, event);
 		Push(event);
 	}
@@ -386,16 +399,97 @@ public:
 	virtual void MouseMoved(BPoint where, uint32 transit,
 		const BMessage* dragMessage)
 	{
-		PcEvent event = MakeEvent(PC_MOUSE_MOVED);
+		PcEvent event = MakeEvent(PC_MOUSE_MOVED, fId);
 		event.x = where.x;
 		event.y = where.y;
 		BMessage* message = Window()->CurrentMessage();
 		if (message != NULL)
 			message->FindInt32("buttons", &event.buttons);
+		Track(message, where, event.buttons);
+		if (fDragging) {
+			// The interface asked to move or resize the window by this
+			// press (an undecorated window's own title bar or edge): the
+			// pointer moves the window, and the interface sees none of it.
+			if (event.buttons != 0) {
+				DragTo(fScreenWhere);
+				return;
+			}
+			fDragging = false;
+		}
 		ReadTablet(message, event);
 		if (transit == B_EXITED_VIEW && event.buttons == 0)
 			event.kind = PC_POINTER_GONE;
 		Push(event);
+	}
+
+	// Where the pointer is on the screen and which buttons are down, as the
+	// last mouse message said.
+	void Track(const BMessage* message, BPoint where, int32 buttons)
+	{
+		if (message == NULL
+			|| message->FindPoint("screen_where", &fScreenWhere) != B_OK)
+			fScreenWhere = ConvertToScreen(where);
+		fButtons = buttons;
+	}
+
+	// Called with the window locked: the pointer, while its button is down,
+	// moves the window (edges 0) or the window's edges (PC_EDGE_*). The
+	// interface asks for it while it handles the press, after the window
+	// got it: by the mouse messages since, not the pointer's state now.
+	void StartDrag(int32 edges)
+	{
+		if (fButtons == 0)
+			return;
+		fDragging = true;
+		fDragEdges = edges;
+		fDragStart = fScreenWhere;
+		fDragFrame = Window()->Frame();
+	}
+
+	void DragTo(BPoint screen)
+	{
+		BPoint delta = screen - fDragStart;
+		BRect frame = fDragFrame;
+		if (fDragEdges == 0)
+			frame.OffsetBy(delta);
+		else {
+			float minWidth, maxWidth, minHeight, maxHeight;
+			Window()->GetSizeLimits(&minWidth, &maxWidth, &minHeight,
+				&maxHeight);
+			if ((fDragEdges & PC_EDGE_LEFT) != 0) {
+				frame.left = std::max(std::min(frame.left + delta.x,
+					frame.right - minWidth), frame.right - maxWidth);
+			}
+			if ((fDragEdges & PC_EDGE_RIGHT) != 0) {
+				frame.right = std::min(std::max(frame.right + delta.x,
+					frame.left + minWidth), frame.left + maxWidth);
+			}
+			if ((fDragEdges & PC_EDGE_TOP) != 0) {
+				frame.top = std::max(std::min(frame.top + delta.y,
+					frame.bottom - minHeight), frame.bottom - maxHeight);
+			}
+			if ((fDragEdges & PC_EDGE_BOTTOM) != 0) {
+				frame.bottom = std::min(std::max(frame.bottom + delta.y,
+					frame.top + minHeight), frame.top + maxHeight);
+			}
+		}
+		Window()->MoveTo(roundf(frame.left), roundf(frame.top));
+		if (fDragEdges != 0)
+			Window()->ResizeTo(roundf(frame.Width()), roundf(frame.Height()));
+	}
+
+	// Called with the window locked: one of Haiku's BCursorIDs.
+	void SetCursorId(int32 id)
+	{
+		static BCursor* sCursors[32] = {};
+		if (id < 1 || id > 31)
+			id = B_CURSOR_ID_SYSTEM_DEFAULT;
+		if (id == fCursor)
+			return;
+		if (sCursors[id] == NULL)
+			sCursors[id] = new BCursor((BCursorID)id);
+		SetViewCursor(sCursors[id]);
+		fCursor = id;
 	}
 
 	virtual void KeyDown(const char* bytes, int32 numBytes)
@@ -410,7 +504,7 @@ public:
 
 	void Key(int32 kind, BMessage* message, const char* bytes, int32 numBytes)
 	{
-		PcEvent event = MakeEvent(kind);
+		PcEvent event = MakeEvent(kind, fId);
 		if (message != NULL) {
 			message->FindInt32("key", &event.key);
 			message->FindInt32("raw_char", &event.raw_char);
@@ -429,7 +523,7 @@ public:
 
 	virtual void FrameResized(float width, float height)
 	{
-		PcEvent event = MakeEvent(PC_RESIZED);
+		PcEvent event = MakeEvent(PC_RESIZED, fId);
 		event.x = width + 1;
 		event.y = height + 1;
 		Push(event);
@@ -439,7 +533,7 @@ public:
 	{
 		if (message->WasDropped() && message->HasRef("refs")) {
 			BPoint where = ConvertFromScreen(message->DropPoint());
-			PcEvent event = MakeEvent(PC_DROPPED_FILES);
+			PcEvent event = MakeEvent(PC_DROPPED_FILES, fId);
 			event.x = where.x;
 			event.y = where.y;
 			std::string paths = PathsOf(message, true);
@@ -454,7 +548,7 @@ public:
 				// (air/OS): its unrounded steps, and the gesture's phase in
 				// clicks (1 began, 2 changed, 3 ended), repeat 1 for the
 				// precise deltas.
-				PcEvent event = MakeEvent(PC_WHEEL);
+				PcEvent event = MakeEvent(PC_WHEEL, fId);
 				message->FindInt32("be:device_subtype", &event.subtype);
 				float dx, dy;
 				int32 phase;
@@ -473,7 +567,7 @@ public:
 				break;
 			}
 			case B_MODIFIERS_CHANGED:
-				Push(MakeEvent(PC_MODIFIERS));
+				Push(MakeEvent(PC_MODIFIERS, fId));
 				break;
 			default:
 				BView::MessageReceived(message);
@@ -576,22 +670,55 @@ public:
 	}
 
 private:
+	int32 fId;
 	BBitmap* fBitmap;
 	float fScale;
+	int32 fCursor;
+	bool fDragging;
+	int32 fDragEdges;
+	BPoint fDragStart;
+	BRect fDragFrame;
+	BPoint fScreenWhere;
+	int32 fButtons = 0;
 };
 
 
 // #pragma mark - Window
 
 
+// The frame of the monitor most of the window is on. On air/OS one desktop
+// spans every monitor (BScreen's frame is all of them); its display layout
+// knows each one. Elsewhere, the screen.
+static BRect
+MonitorFrame(BWindow* window)
+{
+	typedef status_t (*GetDisplayFrame)(BRect, bool, BRect&);
+	static GetDisplayFrame getFrame = (GetDisplayFrame)dlsym(RTLD_DEFAULT,
+		"_ZN8BPrivate17get_display_frameE5BRectbRS0_");
+	BRect display;
+	if (getFrame != NULL && getFrame(window->Frame(), false, display) == B_OK
+		&& display.IsValid())
+		return display;
+	return BScreen(window).Frame();
+}
+
+
 class PcWindow : public BDirectWindow {
 public:
-	PcWindow(BRect frame, const char* title)
+	PcWindow(int32 id, BRect frame, const char* title, window_look look,
+		window_feel feel, uint32 flags)
 		:
-		BDirectWindow(frame, title, B_TITLED_WINDOW,
-			B_ASYNCHRONOUS_CONTROLS | DirectPresentFlags())
+		BDirectWindow(frame, title, look, feel,
+			B_ASYNCHRONOUS_CONTROLS | DirectPresentFlags() | flags),
+		fId(id),
+		fViewTop(0),
+		fDirectSink(NULL),
+		fDirectReported(false),
+		fFullscreen(false),
+		fSavedLook(look)
 	{
-		fView = new PcView(Bounds());
+		memset(&fDirect, 0, sizeof(fDirect));
+		fView = new PcView(Bounds(), id);
 		AddChild(fView);
 		fView->MakeFocus(true);
 		// The interface has its own Cut, Copy, Paste, Select All and Close
@@ -607,7 +734,7 @@ public:
 	{
 		if (sAllowQuit)
 			return true;
-		Push(MakeEvent(PC_CLOSE));
+		Push(MakeEvent(PC_CLOSE, fId));
 		return false;
 	}
 
@@ -635,14 +762,14 @@ public:
 
 	virtual void WindowActivated(bool active)
 	{
-		PcEvent event = MakeEvent(PC_FOCUS);
+		PcEvent event = MakeEvent(PC_FOCUS, fId);
 		event.x = active ? 1 : 0;
 		Push(event);
 	}
 
 	virtual void FrameMoved(BPoint where)
 	{
-		PcEvent event = MakeEvent(PC_MOVED);
+		PcEvent event = MakeEvent(PC_MOVED, fId);
 		event.x = where.x;
 		event.y = where.y;
 		Push(event);
@@ -651,25 +778,25 @@ public:
 	virtual void Minimize(bool minimize)
 	{
 		BWindow::Minimize(minimize);
-		PcEvent event = MakeEvent(PC_MINIMIZED);
+		PcEvent event = MakeEvent(PC_MINIMIZED, fId);
 		event.x = minimize ? 1 : 0;
 		Push(event);
 	}
 
 	virtual void ScreenChanged(BRect frame, color_space mode)
 	{
-		Push(MakeEvent(PC_COLORS));
+		Push(MakeEvent(PC_COLORS, fId));
 	}
 
 	virtual void MessageReceived(BMessage* message)
 	{
 		switch (message->what) {
 			case B_COLORS_UPDATED:
-				Push(MakeEvent(PC_COLORS));
+				Push(MakeEvent(PC_COLORS, fId));
 				break;
 			case kMenuItem:
 			{
-				PcEvent event = MakeEvent(PC_MENU);
+				PcEvent event = MakeEvent(PC_MENU, fId);
 				if (message->FindInt32("index", &event.id) == B_OK)
 					Push(event);
 				break;
@@ -692,11 +819,14 @@ public:
 	PcView* View() const { return fView; }
 	BMenuBar* MenuBar() const { return fMenuBar; }
 
+	// Where the canvas view starts (below the menu bar), logical pixels.
+	int32 ViewTop() const { return fViewTop; }
+
 	// Puts the menu bar at the top (NULL: none) and the canvas below it.
 	// Called with the window locked.
 	void SetMenuBar(BMenuBar* bar)
 	{
-		int32 oldTop = sViewTop;
+		int32 oldTop = fViewTop;
 		if (bar != fMenuBar) {
 			if (fMenuBar != NULL) {
 				RemoveChild(fMenuBar);
@@ -711,11 +841,12 @@ public:
 		LayoutCanvas();
 		// The window grows by the menu bar (or shrinks when it goes), so the
 		// canvas keeps its size and minimum.
-		int32 delta = sViewTop - oldTop;
-		if (delta != 0 && !sFullscreen) {
+		int32 delta = fViewTop - oldTop;
+		if (delta != 0 && !fFullscreen) {
 			float minWidth, maxWidth, minHeight, maxHeight;
 			GetSizeLimits(&minWidth, &maxWidth, &minHeight, &maxHeight);
-			SetSizeLimits(minWidth, maxWidth, minHeight + delta, maxHeight);
+			SetSizeLimits(minWidth, maxWidth, minHeight + delta,
+				maxHeight + delta);
 			ResizeBy(0, delta);
 		}
 	}
@@ -732,7 +863,7 @@ public:
 		BRect bounds = Bounds();
 		fView->MoveTo(0, top);
 		fView->ResizeTo(bounds.Width(), std::max(bounds.Height() - top, 0.0f));
-		sViewTop = (int32_t)top;
+		fViewTop = (int32_t)top;
 	}
 
 	// BDirectWindow's Zoom(BPoint, float, float) hides BWindow's Zoom().
@@ -745,7 +876,7 @@ public:
 	// and clipping are frame buffer pixels.
 	virtual void DirectConnected(direct_buffer_info* info)
 	{
-		std::lock_guard<std::mutex> lock(sDirectLock);
+		std::lock_guard<std::mutex> lock(fDirectLock);
 		bool usable = (info->buffer_state & B_DIRECT_MODE_MASK)
 				!= B_DIRECT_STOP
 			&& info->device_scale >= 100 && info->bits_per_pixel == 32
@@ -754,53 +885,131 @@ public:
 			&& info->layout == B_BUFFER_NONINTERLEAVED
 			&& info->orientation == B_BUFFER_TOP_TO_BOTTOM
 			&& info->clip_list_count <= kMaxDirectRects;
-		sDirect.connected = usable ? 1 : 0;
-		sDirect.rects = sDirectRects;
-		sDirect.rectCount = 0;
+		fDirect.connected = usable ? 1 : 0;
+		fDirect.rects = fDirectRects;
+		fDirect.rectCount = 0;
 		if (usable) {
 			// The canvas is the window below its menu bar.
-			sDirect.bounds[0] = info->window_bounds.left;
-			sDirect.bounds[1] = info->window_bounds.top
-				+ sViewTop * info->device_scale / 100;
-			sDirect.bounds[2] = info->window_bounds.right;
-			sDirect.bounds[3] = info->window_bounds.bottom;
-			sDirect.bytesPerRow = info->bytes_per_row;
-			sDirect.rectCount = info->clip_list_count;
+			fDirect.bounds[0] = info->window_bounds.left;
+			fDirect.bounds[1] = info->window_bounds.top
+				+ fViewTop * info->device_scale / 100;
+			fDirect.bounds[2] = info->window_bounds.right;
+			fDirect.bounds[3] = info->window_bounds.bottom;
+			fDirect.bytesPerRow = info->bytes_per_row;
+			fDirect.rectCount = info->clip_list_count;
 			for (uint32 i = 0; i < info->clip_list_count; i++) {
-				sDirectRects[i * 4] = info->clip_list[i].left;
-				sDirectRects[i * 4 + 1] = info->clip_list[i].top;
-				sDirectRects[i * 4 + 2] = info->clip_list[i].right;
-				sDirectRects[i * 4 + 3] = info->clip_list[i].bottom;
+				fDirectRects[i * 4] = info->clip_list[i].left;
+				fDirectRects[i * 4 + 1] = info->clip_list[i].top;
+				fDirectRects[i * 4 + 2] = info->clip_list[i].right;
+				fDirectRects[i * 4 + 3] = info->clip_list[i].bottom;
 			}
 		}
-		sDirectReported = true;
-		if (sDirectSink != NULL)
-			sDirectSink(&sDirect);
+		fDirectReported = true;
+		if (fDirectSink != NULL)
+			fDirectSink(fId, &fDirect);
 	}
 
+	// Where the window's direct connection is reported (NULL: nowhere). The
+	// last one is reported at once; unsetting waits for a report in
+	// progress, as the sink is called with fDirectLock held.
+	void SetDirectSink(PcDirectSink sink)
+	{
+		std::lock_guard<std::mutex> lock(fDirectLock);
+		fDirectSink = sink;
+		if (sink != NULL && fDirectReported)
+			sink(fId, &fDirect);
+	}
+
+	bool DirectConnectedNow()
+	{
+		std::lock_guard<std::mutex> lock(fDirectLock);
+		return fDirect.connected != 0;
+	}
+
+	// Called with the window locked: the window fills the monitor it is
+	// on, without its border, or goes back to where it was. Its feel stays:
+	// a floating full screen window would cover the floating panels' own
+	// windows (floating ones too, and the last activated is in front).
+	void SetFullscreen(bool fullscreen)
+	{
+		if (fullscreen == fFullscreen)
+			return;
+		fFullscreen = fullscreen;
+		if (fullscreen) {
+			fSavedFrame = Frame();
+			fSavedLook = Look();
+			BRect monitor = MonitorFrame(this);
+			SetLook(B_NO_BORDER_WINDOW_LOOK);
+			MoveTo(monitor.LeftTop());
+			ResizeTo(monitor.Width(), monitor.Height());
+		} else {
+			SetLook(fSavedLook);
+			MoveTo(fSavedFrame.LeftTop());
+			ResizeTo(fSavedFrame.Width(), fSavedFrame.Height());
+		}
+	}
+
+	bool IsFullscreen() const { return fFullscreen; }
+
+	// The look the window has when it isn't full screen.
+	void SetNormalLook(window_look look)
+	{
+		fSavedLook = look;
+		if (!fFullscreen)
+			SetLook(look);
+	}
+
+	int32 Id() const { return fId; }
+
 private:
+	int32 fId;
 	PcView* fView;
 	BMenuBar* fMenuBar = NULL;
+	// Read by the direct daemon thread without the window lock.
+	std::atomic<int32_t> fViewTop;
+
+	// The window's last direct connection and where it is reported to (the
+	// presenter, src/present.rs).
+	std::mutex fDirectLock;
+	PcDirectSink fDirectSink;
+	PcDirect fDirect;
+	bool fDirectReported;
+	int32_t fDirectRects[kMaxDirectRects * 4];
+
+	bool fFullscreen;
+	BRect fSavedFrame;
+	window_look fSavedLook;
 };
 
 
-static PcWindow* sWindow = NULL;
+// The open windows by id. Only the Rust thread adds and removes them. The
+// first one is the main window: the menu bar and the file panels go there.
+static std::mutex sWindowsLock;
+static std::map<int32, PcWindow*> sWindows;
+static int32 sNextWindow = 1;
+static int32 sMainWindow = 0;
 
 
-// The frame of the monitor most of the window is on. On air/OS one desktop
-// spans every monitor (BScreen's frame is all of them); its display layout
-// knows each one. Elsewhere, the screen.
-static BRect
-MonitorFrame(BWindow* window)
+// The window with that id, locked, or NULL. Unlock it when done.
+static PcWindow*
+LockWindow(int32 id)
 {
-	typedef status_t (*GetDisplayFrame)(BRect, bool, BRect&);
-	static GetDisplayFrame getFrame = (GetDisplayFrame)dlsym(RTLD_DEFAULT,
-		"_ZN8BPrivate17get_display_frameE5BRectbRS0_");
-	BRect display;
-	if (getFrame != NULL && getFrame(window->Frame(), false, display) == B_OK
-		&& display.IsValid())
-		return display;
-	return BScreen(window).Frame();
+	PcWindow* window;
+	{
+		std::lock_guard<std::mutex> lock(sWindowsLock);
+		std::map<int32, PcWindow*>::iterator found = sWindows.find(id);
+		if (found == sWindows.end())
+			return NULL;
+		window = found->second;
+	}
+	return window->Lock() ? window : NULL;
+}
+
+
+static PcWindow*
+LockMainWindow()
+{
+	return LockWindow(sMainWindow);
 }
 
 
@@ -1453,43 +1662,132 @@ pc_host_init(const char* signature)
 }
 
 
-// Opens the window: its frame's top-left corner at (x, y) (centred on the
-// screen when x is negative), content size width × height.
+// How pc_host_open_window opens a window (its flags).
+enum {
+	PC_WINDOW_UNDECORATED = 1,
+	PC_WINDOW_FIXED_SIZE = 2,
+	PC_WINDOW_HIDDEN = 4,
+	PC_WINDOW_ZOOMED = 8,
+	PC_WINDOW_NO_CLOSE = 16,
+	PC_WINDOW_NO_MINIMIZE = 32,
+	PC_WINDOW_NO_ZOOM = 64,
+	PC_WINDOW_FLOATING = 128,
+	PC_WINDOW_FULLSCREEN = 256,
+};
+
+
+static uint32
+WindowFlags(int32_t flags)
+{
+	uint32 windowFlags = 0;
+	if ((flags & PC_WINDOW_FIXED_SIZE) != 0)
+		windowFlags |= B_NOT_RESIZABLE | B_NOT_ZOOMABLE;
+	if ((flags & PC_WINDOW_NO_CLOSE) != 0)
+		windowFlags |= B_NOT_CLOSABLE;
+	if ((flags & PC_WINDOW_NO_MINIMIZE) != 0)
+		windowFlags |= B_NOT_MINIMIZABLE;
+	if ((flags & PC_WINDOW_NO_ZOOM) != 0)
+		windowFlags |= B_NOT_ZOOMABLE;
+	return windowFlags;
+}
+
+
+// Opens a window and returns its id (0 when it couldn't): its frame's
+// top-left corner (border and tab included) at (x, y), centred on the monitor
+// of the active window (or the screen) when x is negative, content size
+// width × height, its smallest and largest sizes (0: none) and the
+// PC_WINDOW_* flags. The first window is the main window.
 int32_t
 pc_host_open_window(const char* title, float x, float y, float width,
-	float height, float minWidth, float minHeight, int32_t zoomed)
+	float height, float minWidth, float minHeight, float maxWidth,
+	float maxHeight, int32_t flags)
 {
-	if (sWindow != NULL)
-		return 0;
 	BRect frame(0, 0, width - 1, height - 1);
 	BScreen screen;
 	BRect screenFrame = screen.Frame();
 	if (x >= 0 && y >= 0)
 		frame.OffsetTo(x, y);
-	sWindow = new PcWindow(frame, title);
-	sWindow->SetSizeLimits(minWidth - 1, 32768, minHeight - 1, 32768);
+	int32 id;
+	{
+		std::lock_guard<std::mutex> lock(sWindowsLock);
+		id = sNextWindow++;
+	}
+	PcWindow* window = new PcWindow(id, frame, title,
+		(flags & PC_WINDOW_UNDECORATED) != 0
+			? B_NO_BORDER_WINDOW_LOOK : B_TITLED_WINDOW_LOOK,
+		(flags & PC_WINDOW_FLOATING) != 0
+			? B_FLOATING_ALL_WINDOW_FEEL : B_NORMAL_WINDOW_FEEL,
+		WindowFlags(flags));
+	minWidth = std::max(minWidth, 1.0f);
+	minHeight = std::max(minHeight, 1.0f);
+	window->SetSizeLimits(minWidth - 1, maxWidth > 0 ? maxWidth - 1 : 32768,
+		minHeight - 1, maxHeight > 0 ? maxHeight - 1 : 32768);
 	if (x < 0 || y < 0 || !screenFrame.Intersects(frame)) {
+		// The monitor of the active window (on air/OS the screen spans every
+		// monitor), or the one the window is on.
+		BRect monitor = MonitorFrame(window);
+		{
+			std::lock_guard<std::mutex> lock(sWindowsLock);
+			for (std::map<int32, PcWindow*>::iterator it = sWindows.begin();
+					it != sWindows.end(); it++) {
+				if (it->second->Lock()) {
+					if (it->second->IsActive())
+						monitor = MonitorFrame(it->second);
+					it->second->Unlock();
+				}
+			}
+		}
 		// A default size larger than the monitor (a small or dense display)
 		// shrinks to fit it, with room for the tab, borders and Deskbar.
-		BRect monitor = MonitorFrame(sWindow);
-		float maxWidth = monitor.Width() * 0.92f;
-		float maxHeight = monitor.Height() * 0.88f;
-		if (frame.Width() > maxWidth || frame.Height() > maxHeight) {
-			sWindow->ResizeTo(std::max(std::min(frame.Width(), maxWidth),
+		float fitWidth = monitor.Width() * 0.92f;
+		float fitHeight = monitor.Height() * 0.88f;
+		if (frame.Width() > fitWidth || frame.Height() > fitHeight) {
+			window->ResizeTo(std::max(std::min(frame.Width(), fitWidth),
 					minWidth - 1),
-				std::max(std::min(frame.Height(), maxHeight), minHeight - 1));
+				std::max(std::min(frame.Height(), fitHeight), minHeight - 1));
 		}
-		sWindow->CenterOnScreen();
-	}
-	else {
+		BRect outer = window->DecoratorFrame();
+		window->MoveBy(roundf(monitor.left + (monitor.Width() - outer.Width()) / 2) - outer.left,
+			roundf(monitor.top + (monitor.Height() - outer.Height()) / 2) - outer.top);
+	} else {
 		// (x, y) is where the frame's corner goes, tab and border included.
-		BRect outer = sWindow->DecoratorFrame();
-		sWindow->MoveBy(frame.left - outer.left, frame.top - outer.top);
+		BRect outer = window->DecoratorFrame();
+		window->MoveBy(frame.left - outer.left, frame.top - outer.top);
 	}
-	if (zoomed)
-		sWindow->Zoom();
-	sWindow->Show();
-	return 0;
+	{
+		std::lock_guard<std::mutex> lock(sWindowsLock);
+		sWindows[id] = window;
+		if (sMainWindow == 0)
+			sMainWindow = id;
+	}
+	if ((flags & PC_WINDOW_ZOOMED) != 0)
+		window->Zoom();
+	if ((flags & PC_WINDOW_FULLSCREEN) != 0)
+		window->SetFullscreen(true);
+	// A window made hidden stays locked by its maker (as BWindow's
+	// constructor leaves it) until it is first shown.
+	if ((flags & PC_WINDOW_HIDDEN) == 0)
+		window->Show();
+	return id;
+}
+
+
+// Closes a window pc_host_open_window opened. Its direct connection's sink
+// should be unset first.
+void
+pc_host_close_window(int32_t id)
+{
+	PcWindow* window;
+	{
+		std::lock_guard<std::mutex> lock(sWindowsLock);
+		std::map<int32, PcWindow*>::iterator found = sWindows.find(id);
+		if (found == sWindows.end())
+			return;
+		window = found->second;
+		sWindows.erase(found);
+	}
+	if (window->Lock())
+		window->Quit();
 }
 
 
@@ -1501,10 +1799,21 @@ pc_host_run()
 }
 
 
+// Called by the Rust thread once it is done: its windows close (a window it
+// made hidden is still locked by it), and the application quits.
 void
 pc_host_quit()
 {
+	std::vector<int32> ids;
+	{
+		std::lock_guard<std::mutex> lock(sWindowsLock);
+		for (std::map<int32, PcWindow*>::iterator it = sWindows.begin();
+				it != sWindows.end(); it++)
+			ids.push_back(it->first);
+	}
 	sAllowQuit = true;
+	for (size_t i = 0; i < ids.size(); i++)
+		pc_host_close_window(ids[i]);
 	be_app->PostMessage(B_QUIT_REQUESTED);
 }
 
@@ -1560,182 +1869,208 @@ pc_host_event_text()
 
 
 void
-pc_host_present(const uint32_t* pixels, int32_t width, int32_t height,
-	int32_t x0, int32_t y0, int32_t x1, int32_t y1, float scale)
+pc_host_present(int32_t id, const uint32_t* pixels, int32_t width,
+	int32_t height, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
+	float scale)
 {
-	if (sWindow == NULL || width <= 0 || height <= 0 || scale <= 0
-		|| !sWindow->Lock())
+	if (width <= 0 || height <= 0 || scale <= 0)
 		return;
-	sWindow->View()->Present(pixels, width, height, x0, y0, x1, y1, scale);
-	sWindow->Unlock();
+	PcWindow* window = LockWindow(id);
+	if (window == NULL)
+		return;
+	window->View()->Present(pixels, width, height, x0, y0, x1, y1, scale);
+	window->Unlock();
 }
 
 
 // The rectangles ([x0, y0, x1, y1) device pixels, four values each) of a
 // frame read back from the GPU.
 void
-pc_host_present_rects(const uint32_t* pixels, int32_t width, int32_t height,
-	const int32_t* rects, int32_t count, float scale)
+pc_host_present_rects(int32_t id, const uint32_t* pixels, int32_t width,
+	int32_t height, const int32_t* rects, int32_t count, float scale)
 {
-	if (sWindow == NULL || width <= 0 || height <= 0 || scale <= 0
-		|| count <= 0 || !sWindow->Lock())
+	if (width <= 0 || height <= 0 || scale <= 0 || count <= 0)
 		return;
-	bool direct;
-	{
-		std::lock_guard<std::mutex> lock(sDirectLock);
-		direct = sDirect.connected != 0;
-	}
-	sWindow->View()->PresentRects(pixels, width, height, rects, count, scale,
-		direct);
-	sWindow->Unlock();
+	PcWindow* window = LockWindow(id);
+	if (window == NULL)
+		return;
+	window->View()->PresentRects(pixels, width, height, rects, count, scale,
+		window->DirectConnectedNow());
+	window->Unlock();
 }
 
 
-// Where the window's direct connection is reported (NULL: nowhere). The last
+// Where a window's direct connection is reported (NULL: nowhere). The last
 // one is reported at once; unsetting waits for a report in progress.
 void
-pc_host_direct_sink(PcDirectSink sink)
+pc_host_direct_sink(int32_t id, PcDirectSink sink)
 {
-	std::lock_guard<std::mutex> lock(sDirectLock);
-	sDirectSink = sink;
-	if (sink != NULL && sDirectReported)
-		sink(&sDirect);
+	PcWindow* window;
+	{
+		std::lock_guard<std::mutex> lock(sWindowsLock);
+		std::map<int32, PcWindow*>::iterator found = sWindows.find(id);
+		if (found == sWindows.end())
+			return;
+		window = found->second;
+	}
+	// Not with the window locked: the direct daemon thread reports without
+	// it, and app_server waits for that while the window may wait for us.
+	window->SetDirectSink(sink);
 }
 
 
 void
-pc_host_view_size(float* width, float* height)
-{
-	*width = 0;
-	*height = 0;
-	if (sWindow == NULL || !sWindow->Lock())
-		return;
-	BRect bounds = sWindow->View()->Bounds();
-	*width = bounds.IntegerWidth() + 1;
-	*height = bounds.IntegerHeight() + 1;
-	sWindow->Unlock();
-}
-
-
-void
-pc_host_window_info(PcWindowInfo* info)
+pc_host_window_info(int32_t id, PcWindowInfo* info)
 {
 	memset(info, 0, sizeof(*info));
-	if (sWindow == NULL || !sWindow->Lock())
+	PcWindow* window = LockWindow(id);
+	if (window == NULL)
 		return;
-	BRect inner = sWindow->Frame();
-	BRect outer = sWindow->DecoratorFrame();
-	BRect screen = MonitorFrame(sWindow);
+	BRect inner = window->Frame();
+	BRect outer = window->DecoratorFrame();
+	BRect monitor = MonitorFrame(window);
 	// The interface's viewport is the canvas view, below the menu bar.
 	info->inner_left = inner.left;
-	info->inner_top = inner.top + sViewTop;
+	info->inner_top = inner.top + window->ViewTop();
 	info->inner_right = inner.right + 1;
 	info->inner_bottom = inner.bottom + 1;
 	info->outer_left = outer.left;
 	info->outer_top = outer.top;
 	info->outer_right = outer.right + 1;
 	info->outer_bottom = outer.bottom + 1;
-	info->screen_width = screen.Width() + 1;
-	info->screen_height = screen.Height() + 1;
-	info->minimized = sWindow->IsMinimized();
-	info->active = sWindow->IsActive();
+	info->monitor_left = monitor.left;
+	info->monitor_top = monitor.top;
+	info->monitor_right = monitor.right + 1;
+	info->monitor_bottom = monitor.bottom + 1;
+	info->minimized = window->IsMinimized();
+	info->active = window->IsActive();
 	// Haiku doesn't say whether a window is zoomed.
 	info->zoomed = 0;
-	info->fullscreen = sFullscreen;
-	sWindow->Unlock();
+	info->fullscreen = window->IsFullscreen();
+	info->hidden = window->IsHidden();
+	window->Unlock();
 }
 
 
 void
-pc_host_set_title(const char* title)
+pc_host_set_title(int32_t id, const char* title)
 {
-	if (sWindow == NULL || !sWindow->Lock())
+	PcWindow* window = LockWindow(id);
+	if (window == NULL)
 		return;
-	if (strcmp(sWindow->Title(), title) != 0)
-		sWindow->SetTitle(title);
-	sWindow->Unlock();
+	if (strcmp(window->Title(), title) != 0)
+		window->SetTitle(title);
+	window->Unlock();
 }
 
 
-// The window commands of src/host.rs's `WindowCommand`.
+// The window commands of src/host.rs's `window_command`. Sizes are the
+// canvas's: the main window's menu bar comes on top.
 void
-pc_host_window_command(int32_t command, float a, float b)
+pc_host_window_command(int32_t id, int32_t command, float a, float b)
 {
-	if (sWindow == NULL || !sWindow->Lock())
+	PcWindow* window = LockWindow(id);
+	if (window == NULL)
 		return;
+	int32 top = window->ViewTop();
 	switch (command) {
 		case 1:
 		{
 			// Move the frame's top-left corner (decorator included) to (a, b).
-			BRect inner = sWindow->Frame();
-			BRect outer = sWindow->DecoratorFrame();
-			sWindow->MoveTo(a + inner.left - outer.left, b + inner.top - outer.top);
+			BRect inner = window->Frame();
+			BRect outer = window->DecoratorFrame();
+			window->MoveTo(a + inner.left - outer.left, b + inner.top - outer.top);
 			break;
 		}
 		case 2:
-			// The content size is the canvas's: the menu bar comes on top.
-			sWindow->ResizeTo(a - 1, b - 1 + sViewTop);
+			window->ResizeTo(a - 1, b - 1 + top);
 			break;
 		case 3:
-			sWindow->Minimize(a != 0);
+			window->Minimize(a != 0);
 			break;
 		case 4:
 			// Zoom toggles: only zoom, never un-zoom on request.
 			if (a != 0)
-				sWindow->Zoom();
+				window->Zoom();
 			break;
 		case 5:
-			sWindow->Activate(true);
+			window->Activate(true);
 			break;
 		case 6:
+		case 14:
 		{
 			float minWidth, maxWidth, minHeight, maxHeight;
-			sWindow->GetSizeLimits(&minWidth, &maxWidth, &minHeight, &maxHeight);
-			sWindow->SetSizeLimits(a - 1, maxWidth, b - 1 + sViewTop, maxHeight);
+			window->GetSizeLimits(&minWidth, &maxWidth, &minHeight, &maxHeight);
+			if (command == 6) {
+				window->SetSizeLimits(std::max(a, 1.0f) - 1, maxWidth,
+					std::max(b, 1.0f) - 1 + top, maxHeight);
+			} else {
+				window->SetSizeLimits(minWidth, a > 0 ? a - 1 : 32768,
+					minHeight, b > 0 ? b - 1 + top : 32768);
+			}
 			break;
 		}
-        case 7:
-        {
-            bool on = a != 0;
-            if (on == sFullscreen) break;
-            if (on) {
-                sWindowedFrame = sWindow->Frame();
-                BRect screen = MonitorFrame(sWindow);
-                sWindow->SetLook(B_NO_BORDER_WINDOW_LOOK);
-                sWindow->SetFeel(B_FLOATING_ALL_WINDOW_FEEL);
-                sWindow->MoveTo(screen.LeftTop());
-                sWindow->ResizeTo(screen.Width(), screen.Height());
-            } else {
-                sWindow->SetFeel(B_NORMAL_WINDOW_FEEL);
-                sWindow->SetLook(B_TITLED_WINDOW_LOOK);
-                sWindow->MoveTo(sWindowedFrame.LeftTop());
-                sWindow->ResizeTo(sWindowedFrame.Width(), sWindowedFrame.Height());
-            }
-            sFullscreen = on;
-            break;
-        }
-
+		case 7:
+			if (a != 0 && window->IsHidden())
+				window->Show();
+			else if (a == 0 && !window->IsHidden())
+				window->Hide();
+			break;
+		case 8:
+			window->SetNormalLook(a != 0
+				? B_TITLED_WINDOW_LOOK : B_NO_BORDER_WINDOW_LOOK);
+			break;
+		case 9:
+		{
+			uint32 flags = window->Flags();
+			if (a != 0)
+				flags &= ~(B_NOT_RESIZABLE | B_NOT_ZOOMABLE);
+			else
+				flags |= B_NOT_RESIZABLE | B_NOT_ZOOMABLE;
+			window->SetFlags(flags);
+			break;
+		}
+		case 10:
+			window->SetFeel(a == 1
+				? B_FLOATING_ALL_WINDOW_FEEL : B_NORMAL_WINDOW_FEEL);
+			break;
+		case 11:
+			window->SetFullscreen(a != 0);
+			break;
+		case 12:
+			window->View()->StartDrag(0);
+			break;
+		case 13:
+			window->View()->StartDrag((int32)a);
+			break;
+		case 15:
+		{
+			// The title bar's buttons: 1 close, 2 minimize, 4 zoom.
+			int32 buttons = (int32)a;
+			uint32 flags = window->Flags()
+				& ~(B_NOT_CLOSABLE | B_NOT_MINIMIZABLE | B_NOT_ZOOMABLE);
+			if ((buttons & 1) == 0)
+				flags |= B_NOT_CLOSABLE;
+			if ((buttons & 2) == 0)
+				flags |= B_NOT_MINIMIZABLE;
+			if ((buttons & 4) == 0)
+				flags |= B_NOT_ZOOMABLE;
+			window->SetFlags(flags);
+			break;
+		}
 	}
-	sWindow->Unlock();
+	window->Unlock();
 }
 
 
 void
-pc_host_set_cursor(int32_t id)
+pc_host_set_cursor(int32_t id, int32_t cursor)
 {
-	static int32_t sCurrent = -1;
-	static BCursor* sCursors[32] = {};
-	if (id < 1 || id > 31 || sWindow == NULL)
-		id = B_CURSOR_ID_SYSTEM_DEFAULT;
-	if (id == sCurrent)
+	PcWindow* window = LockWindow(id);
+	if (window == NULL)
 		return;
-	if (sCursors[id] == NULL)
-		sCursors[id] = new BCursor((BCursorID)id);
-	if (!sWindow->Lock())
-		return;
-	sWindow->View()->SetViewCursor(sCursors[id]);
-	sWindow->Unlock();
-	sCurrent = id;
+	window->View()->SetCursorId(cursor);
+	window->Unlock();
 }
 
 
@@ -1937,10 +2272,11 @@ pc_clipboard_set_picture(const char* type, const void* data, size_t length)
 static void
 PositionPanel(BFilePanel* panel)
 {
-    if (sWindow == NULL || !sWindow->Lock()) return;
-    BRect parent = sWindow->Frame();
-    BRect screen = MonitorFrame(sWindow);
-    sWindow->Unlock();
+    PcWindow* main = LockMainWindow();
+    if (main == NULL) return;
+    BRect parent = main->Frame();
+    BRect screen = MonitorFrame(main);
+    main->Unlock();
     BWindow* window = panel->Window();
     if (!window->Lock()) return;
     BRect frame = window->Frame();
@@ -2078,18 +2414,19 @@ pc_host_alert(const char* title, const char* text)
 // #pragma mark - Native menu bar, screen picker, displays
 
 
-// Replaces the window's menu bar with one built from a spec (BuildMenuBar);
-// an empty spec removes it.
+// Replaces the main window's menu bar with one built from a spec
+// (BuildMenuBar); an empty spec removes it.
 void
 pc_menu_build(const char* spec)
 {
-	if (sWindow == NULL || !sWindow->Lock())
+	PcWindow* main = LockMainWindow();
+	if (main == NULL)
 		return;
-	sWindow->SetMenuBar(spec != NULL && spec[0] != '\0'
+	main->SetMenuBar(spec != NULL && spec[0] != '\0'
 		? BuildMenuBar(spec) : NULL);
 	if (spec == NULL || spec[0] == '\0')
 		sMenuItems.clear();
-	sWindow->Unlock();
+	main->Unlock();
 }
 
 
@@ -2098,7 +2435,8 @@ pc_menu_build(const char* spec)
 void
 pc_menu_update(const char* spec)
 {
-	if (sWindow == NULL || !sWindow->Lock())
+	PcWindow* main = LockMainWindow();
+	if (main == NULL)
 		return;
 	BString text(spec != NULL ? spec : "");
 	int32 start = 0;
@@ -2126,7 +2464,7 @@ pc_menu_update(const char* spec)
 		if (item->IsMarked() != marked)
 			item->SetMarked(marked);
 	}
-	sWindow->Unlock();
+	main->Unlock();
 }
 
 
@@ -2181,17 +2519,18 @@ pc_host_screen_pick_cancel(int32_t id)
 }
 
 
-// Where the pointer is, in the canvas view's coordinates (logical pixels,
-// outside the view too). 0 when there is no window.
+// Where the pointer is, in the main window's canvas view's coordinates
+// (logical pixels, outside the view too). 0 when there is no window.
 int32_t
 pc_host_cursor(float* x, float* y)
 {
-	if (sWindow == NULL || !sWindow->Lock())
+	PcWindow* main = LockMainWindow();
+	if (main == NULL)
 		return 0;
 	BPoint where;
 	uint32 buttons;
-	sWindow->View()->GetMouse(&where, &buttons, false);
-	sWindow->Unlock();
+	main->View()->GetMouse(&where, &buttons, false);
+	main->Unlock();
 	*x = where.x;
 	*y = where.y;
 	return 1;

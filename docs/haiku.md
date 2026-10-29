@@ -154,6 +154,78 @@ community links (Help › Discord, the Discord button on the start screen and in
 About) stay: they open the web browser, and upstream has no switch for the host
 to hide them.
 
+### Windows: one `BWindow` per egui viewport
+
+The desktop app opens floating panels, extra document windows (Window › Arrange
+› New Window for Document) and Camera Raw in OS windows of their own: each is an
+egui viewport (craft-ui's dock area draws a floating panel group with
+`show_viewport_immediate`). The host used to embed them all in the main window;
+it now gives every viewport a native window, as eframe does:
+
+- A floating panel group (dragged out of the dock, or `window.panel.float`) is
+  an undecorated window (`B_NO_BORDER_WINDOW_LOOK`) with craft-ui's own bar.
+  Dragging the bar moves it (craft-ui moves the window with `OuterPosition`
+  as the pointer goes, as on Windows and X11); its edges and corners resize it
+  (craft-ui's resize bands send `BeginResize`, and the window follows the
+  pointer while the button stays down); dragging a tab onto the dock docks it
+  again; × closes the panel. Panel windows float above every window
+  (`B_FLOATING_ALL_WINDOW_FEEL`) while PhotoCraft is active and drop to
+  normal windows (`B_NORMAL_WINDOW_FEEL`, behind the active application's) when
+  another application is activated, and while a modal dialog is open, as
+  craft-ui asks (`WindowLevel::AlwaysOnTop`/`Normal`). The Studio themes'
+  Properties card stays inside the main window, as upstream keeps it.
+- Saved workspaces put floating panels back in their windows at the next start.
+- A document's extra window and Camera Raw are normal titled windows; closing
+  one closes that window only. The main window's close button and Quit ask
+  about unsaved documents, then close every window.
+- The native menu bar, the file panels and the screen colour picker belong to
+  the main window. Full Screen modes fill the monitor with the main window
+  without its border; it keeps its normal feel, so the floating panels stay in
+  front of it (a Deskbar set to Always on Top stays in front too).
+- Pen tablets: the stylus samples go to the editor's stylus feed, which is the
+  app's, as AppKit's event monitor and the X11 reader feed it in the desktop
+  app; the pointer moves they come with go to the window they happened in.
+
+Design (shared with WordCraft, whose host has the same driver): `src/viewports.rs`
+is a platform-neutral multi-viewport driver (immediate and deferred viewports,
+per-window input, every viewport's `ViewportInfo` in each pass, builder changes
+and `ViewportCommand`s as native window commands, windows closing when egui drops
+their viewport, repaints by the pass that draws a viewport), tested on Linux
+with a fake platform (`src/viewports/tests.rs`). `src/platform.rs` is its air/OS
+side: `host.cpp` keeps its `PcWindow`s in a map by id and tags every event with
+its window; Vulkan keeps one device and egui renderer (the textures and the
+canvas's paint callback resources are the app's) with a presenter per window,
+and a window whose frame is unchanged isn't drawn again; the rasteriser keeps
+one texture store with a canvas per window. Each window has its own direct
+connection (the main window's canvas starts below its menu bar), cursor, full
+screen state and pointer drag. A GPU fault, reported by the editor's canvas or
+a window's frame, switches the editor and every window to software at the next
+frame. The shell runs the editor's frame in the root viewport's pass; a close
+request for another window gets one more pass, in which the window closes once
+the app has stopped showing it.
+
+`tools/haiku/window-probe.cpp` (built on air/OS with `g++ -o window-probe
+window-probe.cpp -lbe`) lists a running copy's windows (frame, look, feel,
+active) and sends pointer drags and clicks at screen points the way the input
+server does, for testing without someone at the mouse: `window-probe TEAM drag
+X0 Y0 X1 Y1`. It can't press the real buttons, so a window activated by it
+isn't, and another application taking focus during a drag ends the drag (as it
+should).
+
+Tested on the x399 (Vulkan with changed-tile readback, `PHOTOCRAFT_RENDERER=cpu`,
+and `PHOTOCRAFT_PRESENT=direct` with `PRESENT_VERIFY=1`: no wrong pixel in the
+main window or the panels' windows): floating Layers and History, moving a panel
+by its bar (to the point), resizing it from a corner and from its left edge,
+docking it again by dragging its tab onto the Color group, clicks in a panel
+(History states), its × button, PhotoCraft losing focus to Tracker and getting
+it back (panels normal, then floating again), a modal Save Changes prompt
+(panels drop behind, come back after Cancel), a pen stroke from
+`tablet-probe` in the main window (it tapers as before), a document's extra
+window opened and closed, Full Screen Mode With Menu Bar and back with panels
+floating, saved floating panels coming back at the next start, and quitting
+with panels open and an unsaved document (Don't Save). Camera Raw's own window
+wasn't tried.
+
 ### System services
 
 The host fills in the editor's platform services (`Services` in
