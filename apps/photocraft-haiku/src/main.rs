@@ -24,6 +24,7 @@ mod native_menu;
 mod platform;
 #[cfg(target_os = "haiku")]
 mod present;
+mod print;
 mod raster;
 #[cfg(target_os = "haiku")]
 mod scanout;
@@ -139,7 +140,11 @@ fn native_main() -> Result<(), String> {
                 let ctx = egui::Context::default();
                 let mut services = services::native(automation);
                 services.preset_store = services::config_dir().map(|d| photocraft_engine::preset_store::open_dir_async(d.join("Presets")));
-                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+                let mut session = photocraft_engine::Session::new();
+                // File › Print: the print server's printers, and jobs through the print kit.
+                session.print_spooler = Some(services::print_spooler());
+                session.printer_source = Some(services::printer_source());
+                let mut app = PhotocraftApp::new(session, services);
                 app.custom_titlebar = false;
                 app.integrated_titlebar = false;
                 app.background_jobs = true;

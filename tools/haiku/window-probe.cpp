@@ -13,6 +13,10 @@
  *   window-probe TEAM click X Y       a click at screen point (X, Y)
  *   window-probe activate SIGNATURE   activates another application (the
  *                                     PhotoCraft copy loses focus)
+ *   window-probe TEAM enter TITLE     Enter in the window TITLE of any team
+ *                                     (its default button: a printer driver's
+ *                                     setup dialog, whose application is busy
+ *                                     running it and doesn't answer scripting)
  *
  * The messages go to the canvas view of the window under the starting point
  * (the smallest of the team's shown windows that contains it, or window
@@ -21,7 +25,9 @@
  * coordinates when it dispatches each one, so a window that moves under a
  * drag sees the pointer move as it would. The real pointer doesn't move.
  *
- * Build on air/OS: g++ -o window-probe window-probe.cpp -lbe
+ * Build on air/OS: g++ -I/boot/system/develop/headers/private/app
+ *   -I/boot/system/develop/headers/private/shared -o window-probe
+ *   window-probe.cpp -lbe
  */
 
 #include <Application.h>
@@ -32,6 +38,8 @@
 #include <Roster.h>
 #include <String.h>
 #include <View.h>
+
+#include <private/app/MessengerPrivate.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -151,7 +159,7 @@ main(int argc, char** argv)
 		return 2;
 	}
 	sApp = BMessenger(NULL, (team_id)atol(argv[1]));
-	if (!sApp.IsValid()) {
+	if (!sApp.IsValid() && strcmp(argv[2], "enter") != 0) {
 		fprintf(stderr, "no application with team %s\n", argv[1]);
 		return 1;
 	}
@@ -179,6 +187,33 @@ main(int argc, char** argv)
 				hidden ? "\thidden" : "", active ? "\tactive" : "");
 		}
 		return 0;
+	}
+	if (strcmp(argv[2], "enter") == 0 && argc >= 4) {
+		// A window's looper port is named after its title.
+		team_id team = (team_id)atol(argv[1]);
+		port_info info;
+		int32 cookie = 0;
+		port_id port = -1;
+		while (get_next_port_info(team, &cookie, &info) == B_OK) {
+			if (strcmp(info.name, argv[3]) == 0)
+				port = info.port;
+		}
+		if (port < 0) {
+			fprintf(stderr, "no window %s\n", argv[3]);
+			return 1;
+		}
+		BMessenger window;
+		BMessenger::Private(window).SetTo(team, port, B_PREFERRED_TOKEN);
+		BMessage key(B_KEY_DOWN);
+		key.AddInt64("when", system_time());
+		key.AddInt32("key", 0x47);
+		key.AddInt32("raw_char", B_ENTER);
+		key.AddInt32("modifiers", 0);
+		key.AddString("bytes", "\n");
+		key.AddInt8("byte", B_ENTER);
+		status_t status = window.SendMessage(&key);
+		printf("enter: %s\n", strerror(status));
+		return status == B_OK ? 0 : 1;
 	}
 	if ((strcmp(argv[2], "drag") == 0 && argc >= 7)
 		|| (strcmp(argv[2], "click") == 0 && argc >= 5)) {

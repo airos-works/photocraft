@@ -204,13 +204,14 @@ frame. The shell runs the editor's frame in the root viewport's pass; a close
 request for another window gets one more pass, in which the window closes once
 the app has stopped showing it.
 
-`tools/haiku/window-probe.cpp` (built on air/OS with `g++ -o window-probe
-window-probe.cpp -lbe`) lists a running copy's windows (frame, look, feel,
-active) and sends pointer drags and clicks at screen points the way the input
-server does, for testing without someone at the mouse: `window-probe TEAM drag
-X0 Y0 X1 Y1`. It can't press the real buttons, so a window activated by it
-isn't, and another application taking focus during a drag ends the drag (as it
-should).
+`tools/haiku/window-probe.cpp` (its comment says how to build it on air/OS)
+lists a running copy's windows (frame, look, feel, active) and sends pointer
+drags and clicks at screen points the way the input server does, for testing
+without someone at the mouse: `window-probe TEAM drag X0 Y0 X1 Y1`.
+`window-probe TEAM enter TITLE` presses Enter in another team's window (a
+printer driver's setup dialog or alert, whose application is busy running it).
+It can't press the real buttons, so a window clicked by it isn't activated, and
+another application taking focus during a drag ends the drag (as it should).
 
 Tested on the x399 (Vulkan with changed-tile readback, `PHOTOCRAFT_RENDERER=cpu`,
 and `PHOTOCRAFT_PRESENT=direct` with `PRESENT_VERIFY=1`: no wrong pixel in the
@@ -225,6 +226,48 @@ window opened and closed, Full Screen Mode With Menu Bar and back with panels
 floating, saved floating panels coming back at the next start, and quitting
 with panels open and an unsaved document (Don't Save). Camera Raw's own window
 wasn't tried.
+
+### Printing
+
+File › Print (and Print One Copy) prints through the Be print kit. Upstream
+renders the print-ready page as a PDF (the paper, with the image placed, scaled
+and colour-handled on it, and the marks) and hands it to `craft-print`, which
+only knows CUPS and Windows; the host installs a preferred spooler
+(`Session::print_spooler`) and a printer list (`Session::printer_source`) in
+its place (`src/services.rs`):
+
+- The Printer menu lists the print server's printers (the folders in
+  `~/config/settings/printers`, as the Printers preferences show them; the
+  default first). "Default printer" is the print server's default printer.
+- The PDF's page is rasterised by hayro (`src/print.rs`, as PdfCraft draws its
+  pages) at the printer's resolution, at most 300 dpi, and placed on the
+  driver's paper at its real size, centred (shrunk only when it is bigger,
+  turned when a landscape page meets portrait paper). Only the strips of rows
+  with ink are spooled, so the white paper around the image costs nothing.
+  Copies go to the driver.
+- A printer's settings come from its driver through `print_addon_server`, as
+  the print server gets them (`BPrintJob::ConfigPage` only reaches the default
+  printer). libprint's drivers (PostScript, PCL, Gutenprint) have no defaults, so
+  the first print on such a printer opens its Paper setup. Shift held while
+  printing (or `PHOTOCRAFT_PRINT_SETUP=1`) opens the driver's page and job setup;
+  the answers are kept per printer in `~/config/settings/PhotoCraft/printers`.
+- Colour: libprint's drivers start in monochrome; PhotoCraft's jobs ask for
+  colour, unless the printer's job setup has been answered, whose choice then
+  stays.
+- A small window shows the job being spooled and cancels it.
+
+Tested on the x399 with the "PS-File" printer (the PostScript driver on a
+JetDirect transport to a local `nc -l -p 9100`, the output turned into PNGs with
+Ghostscript): a 605×179 px image at 50 % on A4 printed in colour, 4.20 × 1.24 in
+(1261 × 373 dots at 300 dpi) and centred on the sheet; landscape with 2 copies
+printed twice, turned onto the portrait paper and centred; the first job opened
+the driver's Paper setup once, later ones didn't; with
+`PHOTOCRAFT_PRINT_SETUP=1` the page and job setup opened, and the job setup's
+Monochrome was used for that job and the next ones. The printer dialogs were
+answered with `tools/haiku/window-probe.cpp`'s `enter`.
+
+`native/print.cpp` and `src/print.rs` are WordCraft's host's (with the `pc_print_`
+prefix, and a `color` option the WordCraft copy doesn't have yet).
 
 ### System services
 

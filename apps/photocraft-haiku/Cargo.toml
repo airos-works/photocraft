@@ -33,6 +33,10 @@ log.workspace = true
 chrono.workspace = true
 rayon.workspace = true
 image = { workspace = true, features = ["png"] }
+# Printing (src/print.rs): the print-ready PDF's page rasterised for the print kit, as PdfCraft
+# draws its pages; craft-print's printer list type for File › Print.
+hayro = "0.7.1"
+craft-print.workspace = true
 
 [target.'cfg(target_os = "haiku")'.dependencies]
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "vulkan"] }

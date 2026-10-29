@@ -1,5 +1,6 @@
-//! Native air/OS platform services; file and recovery logic follows the desktop host.
-use crate::host;
+//! Native air/OS platform services; file and recovery logic follows the desktop host. Printing
+//! goes to the print kit (`src/print.rs`).
+use crate::{host, print};
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
 use photocraft_format::RecoveryStore;
@@ -332,4 +333,50 @@ pub fn check_pick() {
         return;
     };
     host::screen_pick_cancel(id);
+}
+
+/// File › Print's route to the printer on air/OS: the print-ready PDF the editor makes (its
+/// page is the paper, the image placed on it with the marks) drawn into a `BPrintJob` for the
+/// chosen printer (`src/print.rs`), on the print command's worker. It is preferred, so jobs
+/// don't look for CUPS. Shift held at Print (or `PHOTOCRAFT_PRINT_SETUP=1`) opens the printer
+/// driver's page and job setup first; their answers are kept for that printer in
+/// `~/config/settings/PhotoCraft/printers` and used by every later job on it.
+pub fn print_spooler() -> photocraft_engine::print_cmds::Spooler {
+    use photocraft_engine::print_cmds::{PrintJob, Spooler};
+    Spooler {
+        name: "print kit",
+        preferred: true,
+        run: Arc::new(|job: &PrintJob| {
+            let options = print::Options {
+                title: job.title.clone(),
+                copies: job.copies,
+                // A photo prints in colour: libprint's drivers start in monochrome, and their
+                // job setup's choice (Shift+Print) stays once made.
+                color: true,
+                // The page is laid out on the paper in the orientation the dialog chose.
+                landscape: None,
+                setup: print::shift_down() || std::env::var_os("PHOTOCRAFT_PRINT_SETUP").is_some_and(|v| v != "0"),
+                ..print::Options::default()
+            };
+            let store = print::Store::new(config_dir().map(|d| d.join("printers")));
+            let started = std::time::Instant::now();
+            // The dialog's "default printer" is the print server's; without one, the system's
+            // print setup asks which.
+            let printer = job.printer.clone().or_else(|| print::printers().into_iter().find(|p| p.default).map(|p| p.name));
+            let printer = printer.as_deref();
+            let result = print::print_pdf(printer, job.pdf.clone(), &options, &store).map_err(|e| e.to_string());
+            match &result {
+                Ok(receipt) => log::info!(target: "photocraft_haiku", "printed on {printer:?} in {:.1} s: {receipt}", started.elapsed().as_secs_f32()),
+                Err(e) => log::warn!(target: "photocraft_haiku", "printing on {printer:?}: {e}"),
+            }
+            result
+        }),
+    }
+}
+
+/// The print server's printers for File › Print, the default first.
+pub fn printer_source() -> photocraft_engine::print_cmds::PrinterSource {
+    Arc::new(|| {
+        print::printers().into_iter().map(|p| craft_print::Printer { name: p.name, description: String::new(), default: p.default, two_sided: None }).collect()
+    })
 }
