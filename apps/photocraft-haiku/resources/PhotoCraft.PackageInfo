@@ -1,5 +1,5 @@
 name photocraft
-version 0.17.0~airos1-2
+version 0.17.0~airos1-3
 architecture x86_64
 summary "Layered photo and image editor"
 description "PhotoCraft for air/OS: the Rust image editor with native windows, file panels and clipboard; Vulkan rendering on supported hardware and a software fallback."
