@@ -111,6 +111,23 @@ Native close/quit requests respect the editor's unsaved-changes dialog.
 Settings live in `~/config/settings/PhotoCraft`. `PHOTOCRAFT_CONFIG_DIR` selects
 an isolated directory, and `PHOTOCRAFT_NO_RECOVERY=1` disables recovery for tests.
 
+### One running copy
+
+As the desktop app keeps one PhotoCraft per user (`single_instance`), one copy
+runs (`B_SINGLE_LAUNCH`): documents opened from Tracker while it runs arrive in
+it (`B_REFS_RECEIVED`), and a later launch from Terminal hands its arguments to
+it (`B_ARGV_RECEIVED`, relative paths resolved against the launch's folder) and
+ends before it touches the log, the preferences or the recovery records. Either
+way the documents open as tabs through the editor's own open path, as File ›
+Open does, and the window comes to the front (also for a launch without
+documents). The system matches a running copy by its executable file, not its
+signature, so a test build in another folder runs beside the installed one, each
+with its own recovery records. The desktop app gives automation (`--control`) a
+process of its own; one executable file can't have that here, so a `--control`
+launch while that file's copy runs ends with an error: run the test instance
+from a copy of the executable (or with nothing else running from it). A build
+without the rdef resources (no `rc`/`xres` step) is multiple-launch.
+
 ### Scrolling
 
 A mouse wheel scrolls in whole steps, as before. An air/OS touchpad's scroll

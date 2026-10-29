@@ -75,6 +75,16 @@ fn native_main() -> Result<(), String> {
             _ => files.push(arg),
         }
     }
+    // Before the log file, the preferences or the recovery records are touched: a second launch
+    // (from Terminal; Tracker hands documents to the running copy itself) passes its documents to
+    // the running copy and ends. Automation keeps a process of its own in the desktop app, which
+    // one executable file can't have here.
+    if host::init(services::SIGNATURE)? == host::Launch::HandedOver {
+        if control.is_some() {
+            return Err("PhotoCraft is already running from this file; --control needs a copy of its own (run it from another file)".into());
+        }
+        std::process::exit(0);
+    }
     let automation = if control.is_some() {
         Some(photocraft_automation::AuthorizedWorkspace::new(read_root.as_deref(), write_root.as_deref()).map_err(|e| e.to_string())?)
     } else {
@@ -94,7 +104,6 @@ fn native_main() -> Result<(), String> {
             log::warn!(target: "photocraft_haiku", "Log file: {e}");
         }
     }
-    host::init(services::SIGNATURE)?;
     services::claim_document_types();
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get().clamp(1, 8));
     if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(workers).build_global() {
