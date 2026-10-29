@@ -53,6 +53,14 @@ pub fn profile_dirs() -> Vec<PathBuf> {
         if let Some(h) = &home {
             v.push(h.join("Library/ColorSync/Profiles"));
         }
+    } else if cfg!(target_os = "haiku") {
+        // air/OS: the monitor profiles folder of the native host (apps/photocraft-haiku,
+        // `displays.rs`), and where packages and the user keep shared data.
+        if let Some(h) = &home {
+            v.push(h.join("config/settings/ColorProfiles"));
+            v.push(h.join("config/non-packaged/data/color/icc"));
+        }
+        v.push(PathBuf::from("/boot/system/data/color/icc"));
     } else {
         v.push(PathBuf::from("/usr/share/color/icc"));
         v.push(PathBuf::from("/usr/local/share/color/icc"));

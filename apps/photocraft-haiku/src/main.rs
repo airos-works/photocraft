@@ -8,6 +8,7 @@ mod control_server;
 #[path = "../../photocraft/src/crash_guard.rs"]
 mod crash_guard;
 mod damage;
+mod displays;
 #[cfg(target_os = "haiku")]
 mod gpu;
 #[cfg(target_os = "haiku")]
@@ -16,6 +17,7 @@ mod keys;
 #[cfg(target_os = "haiku")]
 #[path = "../../photocraft/src/logging.rs"]
 mod logging;
+mod native_menu;
 #[cfg(target_os = "haiku")]
 mod present;
 mod raster;
@@ -25,6 +27,7 @@ mod scanout;
 mod services;
 #[cfg(target_os = "haiku")]
 mod shell;
+mod tablet;
 
 #[cfg(not(target_os = "haiku"))]
 fn main() {

@@ -5234,6 +5234,7 @@ dependencies = [
  "image",
  "log",
  "photocraft-automation",
+ "photocraft-cms",
  "photocraft-codecs",
  "photocraft-doc",
  "photocraft-engine",

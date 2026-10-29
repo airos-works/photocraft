@@ -15,6 +15,7 @@
 
 #include <Alert.h>
 #include <Application.h>
+#include <Beep.h>
 #include <Bitmap.h>
 #include <BitmapStream.h>
 #include <Clipboard.h>
@@ -27,9 +28,13 @@
 #include <FindDirectory.h>
 #include <Font.h>
 #include <FormattingConventions.h>
+#include <Input.h>
 #include <InterfaceDefs.h>
 #include <Locale.h>
 #include <LocaleRoster.h>
+#include <Menu.h>
+#include <MenuBar.h>
+#include <MenuItem.h>
 #include <Message.h>
 #include <Messenger.h>
 #include <Mime.h>
@@ -53,6 +58,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -78,6 +84,17 @@ struct PcEvent {
 	float dx;
 	float dy;
 	uint32_t text_len;
+	// What a pen tablet's input add-on reported with a mouse event (see
+	// ReadTablet): tablet 1 with a sample, 2 for a tablet's message without
+	// one, 0 for anything else. Tilt as the add-on sent it (has_tilt).
+	int32_t tablet;
+	float pressure;
+	float tilt_x;
+	float tilt_y;
+	int32_t has_tilt;
+	int32_t eraser;
+	// be:device_subtype (B_*_POINTING_DEVICE), -1 when the message has none.
+	int32_t subtype;
 };
 
 struct PcWindowInfo {
@@ -112,10 +129,19 @@ enum {
 	PC_MOVED = 16,
 	PC_MINIMIZED = 17,
 	PC_COLORS = 18,
+	PC_MENU = 19,
+	PC_SCREEN_PICK = 20,
 };
 
 static const uint32 kDialogAnswer = 'dcDA';
 static const char* kDialogField = "dc:dialog";
+
+// The native menu bar's messages (pc_menu_build): an item of the interface's
+// (its index in "index"), and the window's own Minimize, Zoom and Close.
+static const uint32 kMenuItem = 'pcMI';
+static const uint32 kMenuMinimize = 'pcMm';
+static const uint32 kMenuZoom = 'pcMz';
+static const uint32 kMenuClose = 'pcMc';
 
 
 // #pragma mark - Event queue
@@ -135,6 +161,9 @@ static std::string sCurrentText;
 static volatile bool sAllowQuit = false;
 static bool sFullscreen = false;
 static BRect sWindowedFrame;
+// Where the canvas view starts in the window (below the native menu bar),
+// logical pixels; read by the direct daemon thread without the window lock.
+static std::atomic<int32_t> sViewTop(0);
 
 
 static PcEvent
@@ -144,6 +173,7 @@ MakeEvent(int32_t kind)
 	memset(&event, 0, sizeof(event));
 	event.kind = kind;
 	event.modifiers = modifiers();
+	event.subtype = -1;
 	return event;
 }
 
@@ -153,9 +183,11 @@ Push(const PcEvent& event, const std::string& text = std::string())
 {
 	{
 		std::lock_guard<std::mutex> lock(sQueueLock);
-		// A burst of moves only needs the last position.
-		if (event.kind == PC_MOUSE_MOVED && !sQueue.empty()
+		// A burst of moves only needs the last position; a pen's every
+		// sample counts (its pressure along the stroke).
+		if (event.kind == PC_MOUSE_MOVED && event.tablet != 1 && !sQueue.empty()
 			&& sQueue.back().event.kind == PC_MOUSE_MOVED
+			&& sQueue.back().event.tablet != 1
 			&& sQueue.back().event.buttons == event.buttons) {
 			sQueue.back().event = event;
 		} else {
@@ -239,6 +271,39 @@ DirectPresentFlags()
 }
 
 
+// #pragma mark - Pen tablets
+
+
+// What a pen tablet sent with a mouse message. Haiku's tablet input add-ons
+// (input_server/devices/tablet for HID tablets, wacom, easypen) put the pen's
+// state in B_MOUSE_MOVED: be:tablet_pressure (0..1), be:tablet_eraser, and
+// be:tablet_tilt_x/y when the pen reports tilt. Their B_MOUSE_DOWN and
+// B_MOUSE_UP (except wacom's) carry only be:device_subtype
+// B_TABLET_POINTING_DEVICE: the pen is still down, at its last pressure.
+// The tilt is passed on as sent; src/tablet.rs reads its units.
+static void
+ReadTablet(const BMessage* message, PcEvent& event)
+{
+	if (message == NULL)
+		return;
+	int32 subtype;
+	if (message->FindInt32("be:device_subtype", &subtype) == B_OK)
+		event.subtype = subtype;
+	float pressure;
+	if (message->FindFloat("be:tablet_pressure", &pressure) == B_OK) {
+		event.tablet = 1;
+		event.pressure = pressure;
+		int32 eraser = 0;
+		message->FindInt32("be:tablet_eraser", &eraser);
+		event.eraser = eraser != 0;
+		if (message->FindFloat("be:tablet_tilt_x", &event.tilt_x) == B_OK
+			&& message->FindFloat("be:tablet_tilt_y", &event.tilt_y) == B_OK)
+			event.has_tilt = 1;
+	} else if (event.subtype == B_TABLET_POINTING_DEVICE)
+		event.tablet = 2;
+}
+
+
 // #pragma mark - Canvas view
 
 
@@ -290,7 +355,6 @@ public:
 	virtual void MouseDown(BPoint where)
 	{
 		MakeFocus(true);
-		SetMouseEventMask(B_POINTER_EVENTS, B_NO_POINTER_HISTORY);
 		PcEvent event = MakeEvent(PC_MOUSE_DOWN);
 		event.x = where.x;
 		event.y = where.y;
@@ -299,6 +363,11 @@ public:
 			message->FindInt32("buttons", &event.buttons);
 			message->FindInt32("clicks", &event.clicks);
 		}
+		ReadTablet(message, event);
+		// A mouse drag needs only the latest position; a pen's stroke wants
+		// every sample, each with its pressure.
+		SetMouseEventMask(B_POINTER_EVENTS,
+			event.tablet != 0 ? 0 : B_NO_POINTER_HISTORY);
 		Push(event);
 	}
 
@@ -310,6 +379,7 @@ public:
 		BMessage* message = Window()->CurrentMessage();
 		if (message != NULL)
 			message->FindInt32("buttons", &event.buttons);
+		ReadTablet(message, event);
 		Push(event);
 	}
 
@@ -322,6 +392,7 @@ public:
 		BMessage* message = Window()->CurrentMessage();
 		if (message != NULL)
 			message->FindInt32("buttons", &event.buttons);
+		ReadTablet(message, event);
 		if (transit == B_EXITED_VIEW && event.buttons == 0)
 			event.kind = PC_POINTER_GONE;
 		Push(event);
@@ -580,12 +651,73 @@ public:
 			case B_COLORS_UPDATED:
 				Push(MakeEvent(PC_COLORS));
 				break;
+			case kMenuItem:
+			{
+				PcEvent event = MakeEvent(PC_MENU);
+				if (message->FindInt32("index", &event.id) == B_OK)
+					Push(event);
+				break;
+			}
+			case kMenuMinimize:
+				Minimize(true);
+				break;
+			case kMenuZoom:
+				Zoom();
+				break;
+			case kMenuClose:
+				// The interface's close, with its Save Changes prompt.
+				PostMessage(B_QUIT_REQUESTED);
+				break;
 			default:
 				BWindow::MessageReceived(message);
 		}
 	}
 
 	PcView* View() const { return fView; }
+	BMenuBar* MenuBar() const { return fMenuBar; }
+
+	// Puts the menu bar at the top (NULL: none) and the canvas below it.
+	// Called with the window locked.
+	void SetMenuBar(BMenuBar* bar)
+	{
+		int32 oldTop = sViewTop;
+		if (bar != fMenuBar) {
+			if (fMenuBar != NULL) {
+				RemoveChild(fMenuBar);
+				delete fMenuBar;
+			}
+			fMenuBar = bar;
+			if (bar != NULL) {
+				AddChild(bar);
+				SetKeyMenuBar(bar);
+			}
+		}
+		LayoutCanvas();
+		// The window grows by the menu bar (or shrinks when it goes), so the
+		// canvas keeps its size and minimum.
+		int32 delta = sViewTop - oldTop;
+		if (delta != 0 && !sFullscreen) {
+			float minWidth, maxWidth, minHeight, maxHeight;
+			GetSizeLimits(&minWidth, &maxWidth, &minHeight, &maxHeight);
+			SetSizeLimits(minWidth, maxWidth, minHeight + delta, maxHeight);
+			ResizeBy(0, delta);
+		}
+	}
+
+	void LayoutCanvas()
+	{
+		float top = 0;
+		if (fMenuBar != NULL) {
+			float width, height;
+			fMenuBar->GetPreferredSize(&width, &height);
+			fMenuBar->ResizeTo(Bounds().Width(), height);
+			top = fMenuBar->Frame().bottom + 1;
+		}
+		BRect bounds = Bounds();
+		fView->MoveTo(0, top);
+		fView->ResizeTo(bounds.Width(), std::max(bounds.Height() - top, 0.0f));
+		sViewTop = (int32_t)top;
+	}
 
 	// BDirectWindow's Zoom(BPoint, float, float) hides BWindow's Zoom().
 	using BWindow::Zoom;
@@ -610,8 +742,10 @@ public:
 		sDirect.rects = sDirectRects;
 		sDirect.rectCount = 0;
 		if (usable) {
+			// The canvas is the window below its menu bar.
 			sDirect.bounds[0] = info->window_bounds.left;
-			sDirect.bounds[1] = info->window_bounds.top;
+			sDirect.bounds[1] = info->window_bounds.top
+				+ sViewTop * info->device_scale / 100;
 			sDirect.bounds[2] = info->window_bounds.right;
 			sDirect.bounds[3] = info->window_bounds.bottom;
 			sDirect.bytesPerRow = info->bytes_per_row;
@@ -630,6 +764,7 @@ public:
 
 private:
 	PcView* fView;
+	BMenuBar* fMenuBar = NULL;
 };
 
 
@@ -814,6 +949,431 @@ CopyOut(const void* data, size_t length, size_t* _length)
 	*_length = length;
 	return copy;
 }
+
+
+// #pragma mark - Native menu bar
+
+
+// A menu item whose shortcut BMenuItem can't draw (it draws one character:
+// not F5, Page Up or Home): the shortcut is drawn as text at its right end.
+class PcMenuItem : public BMenuItem {
+public:
+	PcMenuItem(const char* label, BMessage* message, char shortcut,
+		uint32 modifiers, const char* keyText)
+		:
+		BMenuItem(label, message, shortcut, modifiers),
+		fKeyText(keyText)
+	{
+	}
+
+protected:
+	virtual void GetContentSize(float* width, float* height)
+	{
+		BMenuItem::GetContentSize(width, height);
+		if (fKeyText.Length() > 0 && Menu() != NULL) {
+			*width += Menu()->StringWidth(fKeyText.String())
+				+ be_plain_font->Size() * 2;
+		}
+	}
+
+	virtual void DrawContent()
+	{
+		BMenuItem::DrawContent();
+		BMenu* menu = Menu();
+		if (fKeyText.Length() == 0 || menu == NULL)
+			return;
+		font_height height;
+		menu->GetFontHeight(&height);
+		BRect frame = Frame();
+		float width = menu->StringWidth(fKeyText.String());
+		menu->DrawString(fKeyText.String(),
+			BPoint(frame.right - width - be_plain_font->Size() * 0.75f,
+				ContentLocation().y + ceilf(height.ascent)));
+	}
+
+private:
+	BString fKeyText;
+};
+
+
+// The items of the menu bar pc_menu_build made last, by index (NULL for the
+// window's own items).
+static std::vector<BMenuItem*> sMenuItems;
+
+
+// The fields of one line of a menu spec (tab-separated).
+static std::vector<BString>
+SplitTabs(const BString& line)
+{
+	std::vector<BString> fields;
+	int32 start = 0;
+	while (true) {
+		int32 end = line.FindFirst('\t', start);
+		BString field;
+		line.CopyInto(field, start, (end < 0 ? line.Length() : end) - start);
+		fields.push_back(field);
+		if (end < 0)
+			break;
+		start = end + 1;
+	}
+	return fields;
+}
+
+
+// Builds a menu bar from a spec, one line per entry (src/native_menu.rs):
+//   M <title>                     a menu, until its E
+//   S <label>                     a submenu, until its E
+//   E                             the end of a menu or submenu
+//   -                             a separator
+//   I <index> <label> <char> <modifiers> <key text> <enabled> <checked>
+//                                 an item (char: its shortcut's character
+//                                 code, 0 for none; checked: -1 for an item
+//                                 that is never checked)
+//   W <min|zoom|close> <label>    one of the window's own items
+static BMenuBar*
+BuildMenuBar(const char* spec)
+{
+	BMenuBar* bar = new BMenuBar(BRect(0, 0, 100, 10), "menu bar",
+		B_FOLLOW_LEFT_RIGHT | B_FOLLOW_TOP);
+	std::vector<BMenu*> stack;
+	sMenuItems.clear();
+	BString text(spec);
+	int32 start = 0;
+	while (start < text.Length()) {
+		int32 end = text.FindFirst('\n', start);
+		if (end < 0)
+			end = text.Length();
+		BString line;
+		text.CopyInto(line, start, end - start);
+		start = end + 1;
+		std::vector<BString> f = SplitTabs(line);
+		if (f.empty() || f[0].Length() != 1)
+			continue;
+		BMenu* menu = stack.empty() ? NULL : stack.back();
+		switch (f[0][0]) {
+			case 'M':
+			case 'S':
+			{
+				BMenu* sub = new BMenu(f.size() > 1 ? f[1].String() : "");
+				if (menu != NULL)
+					menu->AddItem(sub);
+				else
+					bar->AddItem(sub);
+				stack.push_back(sub);
+				break;
+			}
+			case 'E':
+				if (!stack.empty())
+					stack.pop_back();
+				break;
+			case '-':
+				if (menu != NULL)
+					menu->AddSeparatorItem();
+				break;
+			case 'I':
+			{
+				if (menu == NULL || f.size() < 8)
+					break;
+				int32 index = atoi(f[1].String());
+				BMessage* message = new BMessage(kMenuItem);
+				message->AddInt32("index", index);
+				PcMenuItem* item = new PcMenuItem(f[2].String(), message,
+					(char)atoi(f[3].String()), (uint32)atoi(f[4].String()),
+					f[5].String());
+				item->SetEnabled(atoi(f[6].String()) != 0);
+				item->SetMarked(atoi(f[7].String()) > 0);
+				menu->AddItem(item);
+				if (index >= 0 && index < 100000) {
+					if ((size_t)index >= sMenuItems.size())
+						sMenuItems.resize(index + 1, NULL);
+					sMenuItems[index] = item;
+				}
+				break;
+			}
+			case 'W':
+			{
+				if (menu == NULL || f.size() < 3)
+					break;
+				uint32 what = f[1] == "min" ? kMenuMinimize
+					: f[1] == "zoom" ? kMenuZoom : kMenuClose;
+				menu->AddItem(new BMenuItem(f[2].String(), new BMessage(what),
+					what == kMenuMinimize ? 'M' : what == kMenuClose ? 'W' : 0));
+				break;
+			}
+		}
+	}
+	return bar;
+}
+
+
+// #pragma mark - Screen colour picker
+
+
+static const uint32 kPickerZoomMin = 4;
+static const uint32 kPickerZoomMax = 24;
+
+// The pick in progress (pc_host_screen_pick); the picker's window answers it
+// from its own thread.
+static std::mutex sPickLock;
+static int32 sPickId = -1;
+static bool sPickAnswered = true;
+static BMessenger sPicker;
+
+
+// Hands the picker's answer to the interface (once per pick): the colour as
+// 0xRRGGBB in buttons and the screen point it was at, or picked 0.
+static void
+AnswerPick(int32 id, bool picked, uint32 rgb, BPoint where)
+{
+	{
+		std::lock_guard<std::mutex> lock(sPickLock);
+		if (id != sPickId || sPickAnswered)
+			return;
+		sPickAnswered = true;
+	}
+	PcEvent event = MakeEvent(PC_SCREEN_PICK);
+	event.id = id;
+	event.x = picked ? 1 : 0;
+	event.buttons = (int32)rgb;
+	event.dx = where.x;
+	event.dy = where.y;
+	Push(event);
+}
+
+
+// Shows a snapshot of the screen (its view bitmap) under a magnifying loupe.
+// A click picks the pixel under the pointer; Esc or a right click cancels, as
+// in the interface's own picker (crates/ui-egui/src/dialogs/screen_picker.rs).
+class PickerView : public BView {
+public:
+	PickerView(BRect frame, BBitmap* snapshot, int32 id, const char* hint,
+		const char* wheelHint)
+		:
+		BView(frame, "picker", B_FOLLOW_ALL_SIDES, B_WILL_DRAW),
+		fSnapshot(snapshot),
+		fId(id),
+		fHint(hint),
+		fWheelHint(wheelHint),
+		fZoom(12),
+		fWhere(-1, -1),
+		fPressed(0),
+		fCursor(B_CURSOR_ID_CROSS_HAIR)
+	{
+	}
+
+	~PickerView()
+	{
+		delete fSnapshot;
+	}
+
+	virtual void AttachedToWindow()
+	{
+		// The snapshot is drawn by app_server, under the loupe.
+		SetViewBitmap(fSnapshot, fSnapshot->Bounds(), Bounds(),
+			B_FOLLOW_TOP | B_FOLLOW_LEFT, 0);
+		SetViewCursor(&fCursor);
+		MakeFocus(true);
+		BPoint where;
+		uint32 buttons;
+		GetMouse(&where, &buttons, false);
+		fWhere = where;
+	}
+
+	virtual void Draw(BRect updateRect)
+	{
+		if (!Bounds().Contains(fWhere))
+			return;
+		BRect box = Loupe();
+		rgb_color panel = ui_color(B_MENU_BACKGROUND_COLOR);
+		rgb_color text = ui_color(B_MENU_ITEM_TEXT_COLOR);
+		SetHighColor(panel);
+		FillRect(box);
+		SetHighColor(tint_color(panel, B_DARKEN_2_TINT));
+		StrokeRect(box);
+		int32 px, py;
+		Pixel(fWhere, px, py);
+		BPoint origin = box.LeftTop() + BPoint(
+			floorf((box.Width() - 11 * fZoom) / 2), 6);
+		for (int32 row = 0; row < 11; row++) {
+			for (int32 col = 0; col < 11; col++) {
+				rgb_color color;
+				if (!Color(px + col - 5, py + row - 5, color))
+					color = panel;
+				SetHighColor(color);
+				FillRect(BRect(origin.x + col * fZoom, origin.y + row * fZoom,
+					origin.x + (col + 1) * fZoom - 1,
+					origin.y + (row + 1) * fZoom - 1));
+			}
+		}
+		BRect center(origin.x + 5 * fZoom, origin.y + 5 * fZoom,
+			origin.x + 6 * fZoom - 1, origin.y + 6 * fZoom - 1);
+		SetHighColor(0, 0, 0);
+		StrokeRect(center.InsetByCopy(-1, -1));
+		SetHighColor(255, 255, 255);
+		StrokeRect(center);
+		rgb_color picked;
+		BString label;
+		if (Color(px, py, picked))
+			label.SetToFormat("#%02X%02X%02X   %" B_PRIu32 "\xC3\x97", picked.red,
+				picked.green, picked.blue, fZoom);
+		font_height height;
+		GetFontHeight(&height);
+		float line = ceilf(height.ascent + height.descent + height.leading);
+		SetHighColor(text);
+		SetLowColor(panel);
+		BPoint at(box.left + 8, origin.y + 11 * fZoom + 8 + height.ascent);
+		DrawString(label.String(), at);
+		DrawString(fHint.String(), at + BPoint(0, line));
+		DrawString(fWheelHint.String(), at + BPoint(0, 2 * line));
+	}
+
+	virtual void MouseMoved(BPoint where, uint32 transit,
+		const BMessage* dragMessage)
+	{
+		Invalidate(Loupe());
+		fWhere = where;
+		Invalidate(Loupe());
+	}
+
+	virtual void MouseDown(BPoint where)
+	{
+		SetMouseEventMask(B_POINTER_EVENTS, B_NO_POINTER_HISTORY);
+		int32 buttons = 0;
+		Window()->CurrentMessage()->FindInt32("buttons", &buttons);
+		fPressed |= buttons;
+		if ((buttons & B_SECONDARY_MOUSE_BUTTON) != 0)
+			Finish(false, where);
+	}
+
+	virtual void MouseUp(BPoint where)
+	{
+		// A press that moved picks where it is released.
+		if ((fPressed & B_PRIMARY_MOUSE_BUTTON) != 0)
+			Finish(true, where);
+	}
+
+	virtual void KeyDown(const char* bytes, int32 numBytes)
+	{
+		if (numBytes == 1 && bytes[0] == B_ESCAPE)
+			Finish(false, fWhere);
+		else
+			BView::KeyDown(bytes, numBytes);
+	}
+
+	virtual void MessageReceived(BMessage* message)
+	{
+		if (message->what == B_MOUSE_WHEEL_CHANGED) {
+			float delta = 0;
+			message->FindFloat("be:wheel_delta_y", &delta);
+			Invalidate(Loupe());
+			if (delta < 0 && fZoom + 2 <= kPickerZoomMax)
+				fZoom += 2;
+			else if (delta > 0 && fZoom - 2 >= kPickerZoomMin)
+				fZoom -= 2;
+			Invalidate(Loupe());
+			return;
+		}
+		BView::MessageReceived(message);
+	}
+
+	void Finish(bool pick, BPoint where)
+	{
+		int32 px, py;
+		rgb_color color;
+		Pixel(where, px, py);
+		bool picked = pick && Bounds().Contains(where) && Color(px, py, color);
+		uint32 rgb = picked ? ((uint32)color.red << 16)
+			| ((uint32)color.green << 8) | color.blue : 0;
+		AnswerPick(fId, picked, rgb, ConvertToScreen(where));
+		Window()->PostMessage(B_QUIT_REQUESTED);
+	}
+
+private:
+	// The loupe's box: below and right of the pointer, kept on the screen.
+	BRect Loupe() const
+	{
+		float width = std::max(11.0f * fZoom + 12,
+			std::max(StringWidth(fHint.String()), StringWidth(fWheelHint.String()))
+				+ 16);
+		font_height height;
+		GetFontHeight(&height);
+		float line = ceilf(height.ascent + height.descent + height.leading);
+		BRect box(0, 0, width, 11 * fZoom + 14 + 3 * line);
+		BRect bounds = Bounds();
+		box.OffsetTo(std::max(bounds.left,
+				std::min(fWhere.x + 24, bounds.right - box.Width())),
+			std::max(bounds.top,
+				std::min(fWhere.y + 24, bounds.bottom - box.Height())));
+		return box;
+	}
+
+	// The snapshot's pixel under a point of the view (the view may be
+	// logical pixels and the snapshot device pixels).
+	void Pixel(BPoint where, int32& x, int32& y) const
+	{
+		BRect bounds = Bounds();
+		BRect source = fSnapshot->Bounds();
+		x = (int32)floorf((where.x - bounds.left) * (source.Width() + 1)
+			/ (bounds.Width() + 1));
+		y = (int32)floorf((where.y - bounds.top) * (source.Height() + 1)
+			/ (bounds.Height() + 1));
+	}
+
+	bool Color(int32 x, int32 y, rgb_color& color) const
+	{
+		BRect source = fSnapshot->Bounds();
+		if (x < 0 || y < 0 || x > source.IntegerWidth()
+			|| y > source.IntegerHeight())
+			return false;
+		const uint8* bits = (const uint8*)fSnapshot->Bits()
+			+ (size_t)y * fSnapshot->BytesPerRow() + (size_t)x * 4;
+		color.blue = bits[0];
+		color.green = bits[1];
+		color.red = bits[2];
+		color.alpha = 255;
+		return true;
+	}
+
+	BBitmap* fSnapshot;
+	int32 fId;
+	BString fHint;
+	BString fWheelHint;
+	uint32 fZoom;
+	BPoint fWhere;
+	int32 fPressed;
+	BCursor fCursor;
+};
+
+
+class PickerWindow : public BWindow {
+public:
+	PickerWindow(BRect frame, BBitmap* snapshot, int32 id, const char* hint,
+		const char* wheelHint)
+		:
+		BWindow(frame, "Screen Color Picker", B_NO_BORDER_WINDOW_LOOK,
+			B_FLOATING_ALL_WINDOW_FEEL, B_NOT_MOVABLE | B_NOT_RESIZABLE
+				| B_NOT_ZOOMABLE | B_NOT_MINIMIZABLE | B_ASYNCHRONOUS_CONTROLS),
+		fId(id)
+	{
+		AddChild(new PickerView(Bounds(), snapshot, id, hint, wheelHint));
+	}
+
+	virtual void WindowActivated(bool active)
+	{
+		if (active && ChildAt(0) != NULL)
+			ChildAt(0)->MakeFocus(true);
+	}
+
+	virtual bool QuitRequested()
+	{
+		// Closed any other way (pc_host_screen_pick_cancel): no colour.
+		AnswerPick(fId, false, 0, BPoint(0, 0));
+		return true;
+	}
+
+private:
+	int32 fId;
+};
 
 
 // #pragma mark - C interface
@@ -1005,8 +1565,9 @@ pc_host_window_info(PcWindowInfo* info)
 	BRect inner = sWindow->Frame();
 	BRect outer = sWindow->DecoratorFrame();
 	BRect screen = MonitorFrame(sWindow);
+	// The interface's viewport is the canvas view, below the menu bar.
 	info->inner_left = inner.left;
-	info->inner_top = inner.top;
+	info->inner_top = inner.top + sViewTop;
 	info->inner_right = inner.right + 1;
 	info->inner_bottom = inner.bottom + 1;
 	info->outer_left = outer.left;
@@ -1051,7 +1612,8 @@ pc_host_window_command(int32_t command, float a, float b)
 			break;
 		}
 		case 2:
-			sWindow->ResizeTo(a - 1, b - 1);
+			// The content size is the canvas's: the menu bar comes on top.
+			sWindow->ResizeTo(a - 1, b - 1 + sViewTop);
 			break;
 		case 3:
 			sWindow->Minimize(a != 0);
@@ -1068,7 +1630,7 @@ pc_host_window_command(int32_t command, float a, float b)
 		{
 			float minWidth, maxWidth, minHeight, maxHeight;
 			sWindow->GetSizeLimits(&minWidth, &maxWidth, &minHeight, &maxHeight);
-			sWindow->SetSizeLimits(a - 1, maxWidth, b - 1, maxHeight);
+			sWindow->SetSizeLimits(a - 1, maxWidth, b - 1 + sViewTop, maxHeight);
 			break;
 		}
         case 7:
@@ -1449,6 +2011,200 @@ pc_host_alert(const char* title, const char* text)
 	BAlert* alert = new BAlert(title, text, "OK", NULL, NULL,
 		B_WIDTH_AS_USUAL, B_STOP_ALERT);
 	alert->Go();
+}
+
+
+// #pragma mark - Native menu bar, screen picker, displays
+
+
+// Replaces the window's menu bar with one built from a spec (BuildMenuBar);
+// an empty spec removes it.
+void
+pc_menu_build(const char* spec)
+{
+	if (sWindow == NULL || !sWindow->Lock())
+		return;
+	sWindow->SetMenuBar(spec != NULL && spec[0] != '\0'
+		? BuildMenuBar(spec) : NULL);
+	if (spec == NULL || spec[0] == '\0')
+		sMenuItems.clear();
+	sWindow->Unlock();
+}
+
+
+// Updates items of the menu bar in place, one per line: index, label,
+// enabled (0/1) and checked (-1, 0, 1), tab-separated.
+void
+pc_menu_update(const char* spec)
+{
+	if (sWindow == NULL || !sWindow->Lock())
+		return;
+	BString text(spec != NULL ? spec : "");
+	int32 start = 0;
+	while (start < text.Length()) {
+		int32 end = text.FindFirst('\n', start);
+		if (end < 0)
+			end = text.Length();
+		BString line;
+		text.CopyInto(line, start, end - start);
+		start = end + 1;
+		std::vector<BString> f = SplitTabs(line);
+		if (f.size() < 4)
+			continue;
+		int32 index = atoi(f[0].String());
+		if (index < 0 || (size_t)index >= sMenuItems.size()
+			|| sMenuItems[index] == NULL)
+			continue;
+		BMenuItem* item = sMenuItems[index];
+		if (f[1] != item->Label())
+			item->SetLabel(f[1].String());
+		bool enabled = atoi(f[2].String()) != 0;
+		if (item->IsEnabled() != enabled)
+			item->SetEnabled(enabled);
+		bool marked = atoi(f[3].String()) > 0;
+		if (item->IsMarked() != marked)
+			item->SetMarked(marked);
+	}
+	sWindow->Unlock();
+}
+
+
+// Shows the screen colour picker over a snapshot of the whole screen. Its
+// answer arrives as a PC_SCREEN_PICK event with the id. -1 when the screen
+// couldn't be read.
+int32_t
+pc_host_screen_pick(int32_t id, const char* hint, const char* wheelHint)
+{
+	BScreen screen(B_MAIN_SCREEN_ID);
+	if (!screen.IsValid())
+		return -1;
+	BBitmap* shot = NULL;
+	if (screen.GetBitmap(&shot, false) != B_OK || shot == NULL)
+		return -1;
+	if (shot->ColorSpace() != B_RGB32 && shot->ColorSpace() != B_RGBA32) {
+		BBitmap* converted = new BBitmap(shot->Bounds(), B_RGB32);
+		status_t status = converted->InitCheck();
+		if (status == B_OK)
+			status = converted->ImportBits(shot);
+		delete shot;
+		if (status != B_OK) {
+			delete converted;
+			return -1;
+		}
+		shot = converted;
+	}
+	{
+		std::lock_guard<std::mutex> lock(sPickLock);
+		if (sPicker.IsValid())
+			sPicker.SendMessage(B_QUIT_REQUESTED);
+		sPickId = id;
+		sPickAnswered = false;
+	}
+	PickerWindow* window = new PickerWindow(screen.Frame(), shot, id,
+		hint != NULL ? hint : "", wheelHint != NULL ? wheelHint : "");
+	sPicker = BMessenger(window);
+	window->Show();
+	window->Activate(true);
+	return 0;
+}
+
+
+// Closes the picker of that pick, if it is still up (the interface stopped
+// waiting for it).
+void
+pc_host_screen_pick_cancel(int32_t id)
+{
+	std::lock_guard<std::mutex> lock(sPickLock);
+	if (id == sPickId && sPicker.IsValid())
+		sPicker.SendMessage(B_QUIT_REQUESTED);
+}
+
+
+// Where the pointer is, in the canvas view's coordinates (logical pixels,
+// outside the view too). 0 when there is no window.
+int32_t
+pc_host_cursor(float* x, float* y)
+{
+	if (sWindow == NULL || !sWindow->Lock())
+		return 0;
+	BPoint where;
+	uint32 buttons;
+	sWindow->View()->GetMouse(&where, &buttons, false);
+	sWindow->Unlock();
+	*x = where.x;
+	*y = where.y;
+	return 1;
+}
+
+
+void
+pc_host_beep()
+{
+	beep();
+}
+
+
+// The displays, one per line, tab-separated: id, frame (left, top, right,
+// bottom, as window frames are measured), primary (0/1), connector, monitor
+// name, vendor, serial number. air/OS: every enabled display of its layout
+// that isn't a mirror; elsewhere the screen, with BScreen::GetMonitorInfo's
+// name and serial number.
+static BString
+Field(const char* text)
+{
+	BString field(text != NULL ? text : "");
+	field.ReplaceAll('\t', ' ');
+	field.ReplaceAll('\n', ' ');
+	return field.Trim();
+}
+
+
+char*
+pc_host_displays()
+{
+	BString lines;
+	typedef status_t (*GetLayout)(BMessage&);
+	static GetLayout getLayout = (GetLayout)dlsym(RTLD_DEFAULT,
+		"_ZN8BPrivate18get_display_layoutER8BMessage");
+	BMessage layout;
+	if (getLayout != NULL && getLayout(layout) == B_OK) {
+		BMessage display;
+		for (int32 i = 0; layout.FindMessage("display", i, &display) == B_OK;
+				i++) {
+			BRect frame;
+			if (!display.GetBool("connected", true)
+				|| !display.GetBool("enabled", true)
+				|| display.GetInt32("mirror", -1) >= 0
+				|| display.FindRect("frame", &frame) != B_OK
+				|| !frame.IsValid())
+				continue;
+			BString line;
+			line.SetToFormat("%" B_PRId32 "\t%g\t%g\t%g\t%g\t%d\t%s\t%s\t%s\t%s\n",
+				display.GetInt32("id", i), frame.left, frame.top,
+				frame.right + 1, frame.bottom + 1,
+				display.GetBool("primary", false) ? 1 : 0,
+				Field(display.GetString("name", "")).String(),
+				Field(display.GetString("monitor", "")).String(),
+				Field(display.GetString("vendor", "")).String(),
+				Field(display.GetString("serial", "")).String());
+			lines << line;
+		}
+	}
+	if (lines.Length() == 0) {
+		BScreen screen(B_MAIN_SCREEN_ID);
+		monitor_info info;
+		memset(&info, 0, sizeof(info));
+		if (screen.IsValid() && screen.GetMonitorInfo(&info) != B_OK)
+			memset(&info, 0, sizeof(info));
+		BRect frame = screen.Frame();
+		if (screen.IsValid()) {
+			lines.SetToFormat("%" B_PRId32 "\t%g\t%g\t%g\t%g\t1\t\t%s\t%s\t%s\n",
+				screen.ID().id, frame.left, frame.top, frame.right + 1,
+				frame.bottom + 1, Field(info.name).String(),
+				Field(info.vendor).String(), Field(info.serial_number).String());
+		}
+	}
+	return strdup(lines.String());
 }
 
 

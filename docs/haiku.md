@@ -100,8 +100,78 @@ Native close/quit requests respect the editor's unsaved-changes dialog.
 
 Settings live in `~/config/settings/PhotoCraft`. `PHOTOCRAFT_CONFIG_DIR` selects
 an isolated directory, and `PHOTOCRAFT_NO_RECOVERY=1` disables recovery for tests.
-Native tablet pressure and automatic monitor-profile discovery are not wired
-in this initial host; the editor's explicit colour-profile controls remain.
+
+### System services
+
+The host fills in the editor's platform services (`Services` in
+`crates/ui-egui/src/services.rs`) the Haiku way:
+
+- **Menu bar** (`native_menu`, `src/native_menu.rs`): the menus are a native
+  `BMenuBar` at the top of the window, and the in-window menus are hidden.
+  Upstream lays them out for a Mac (an app menu named PhotoCraft); here About
+  goes at the end of Help, Settings (the Preferences pages) at the end of Edit,
+  Language and Appearance at the end of Window, and Quit at the end of File.
+  Minimize, Zoom and Close Window are the window's own. Keys stay with the
+  editor, as upstream's contract asks: the window hands Command keys to the
+  canvas before `BWindow` looks for a menu shortcut, so the menus only show
+  them (Command shortcuts as Haiku draws them, the others, such as `F1`,
+  `Shift+F5` or a tool's letter, as text). Command+Q still reaches `BWindow`
+  and runs File › Quit, with the Save Changes prompt.
+  `PHOTOCRAFT_NATIVE_MENU=0` keeps the in-window menus. The window grows by
+  the bar, so the canvas keeps its size; the interface's viewport, resize
+  commands and the direct presentation's frame start below the bar (the direct
+  path with the bar is untested, like the direct path on NVK).
+- **Pen tablets** (`src/tablet.rs`): Haiku's tablet input add-ons
+  (`input_server/devices/tablet` for USB/I²C HID tablets, `wacom`, `easypen`)
+  send the pen's state with `B_MOUSE_MOVED`: `be:tablet_pressure` (0..1),
+  `be:tablet_eraser` and, when the pen has it, `be:tablet_tilt_x`/`_y`. The
+  host passes each sample to the canvas's stylus input (the one the desktop
+  app's macOS and X11 readers feed), so pressure, tilt and the eraser end work
+  as there (Preferences › Tools › Use Tablet Pressure, the eraser end selecting
+  the Eraser). A pen's moves are never merged, and its drags keep the pointer
+  history, so a stroke gets every sample. The HID add-on's button messages carry
+  no sample (the pen keeps its last one), and its tilt is the HID report's value
+  scaled to 0..1 (upright at 0.5), Wacom's -1..1; both become ±64°. Haiku
+  reports no barrel rotation. `tools/haiku/tablet-probe.cpp` sends the canvas a
+  stroke as the add-ons would, for testing without a tablet.
+- **Monitor profiles** (`read_displays`, `src/displays.rs`): neither Haiku nor
+  air/OS keeps a colour profile for a screen (app_server and the Screen
+  preferences have no colour management). So the profile of a monitor is a file
+  in `~/config/settings/ColorProfiles/` (the folder is made at the first launch),
+  named after the monitor; the first of these that exists is used, whatever the
+  letter case, `.icc` or `.icm`:
+  1. `<monitor name> <serial number>.icc`, to tell two identical monitors apart;
+  2. `<monitor name>.icc`, the monitor's name in the Screen preferences
+     (its EDID name, e.g. `DELL U2720Q.icc`);
+  3. `<connector>.icc` (e.g. `DP-2.icc`), for a monitor without EDID;
+  4. `default.icc`, for every monitor without one of its own.
+
+  On air/OS each monitor of the display layout is a display of its own, with
+  its frame on the desktop; on Haiku the screen, named by
+  `BScreen::GetMonitorInfo`. With Edit › Color Settings › Monitor Profile at
+  Auto, the canvas is shown in the profile of the monitor most of the window is
+  on, and Help › System Info lists each monitor's. A monitor without a profile
+  is shown as sRGB, and the editor says so once. The folder is also among the
+  installed profiles the colour dialogs list (with
+  `~/config/non-packaged/data/color/icc` and `/boot/system/data/color/icc`).
+- **Screen colour picker** (`screen_pick`): Pick Screen Color in the colour
+  dialogs covers every monitor with a snapshot of the screen
+  (`BScreen::GetBitmap`) under a loupe; a click picks the pixel under the
+  pointer, Esc or a right click cancels, the wheel zooms. The picked pixel is
+  converted to sRGB through the profile of its monitor, as above. (The editor's
+  own picker shows its snapshots in viewports of their own, which this host
+  embeds in its window, so the picker is native.)
+- **Caps Lock** (`caps_lock`) shows the painting tools' precise cursor;
+  **Beep When Done** (`beep`) plays the Beep sound of the Sounds preferences;
+  Appearance › Auto follows the panel colour of the Appearance preferences
+  (`system_theme`, re-read when they change).
+- **Drops** (`cursor_pos`): files dropped on the window go to the editor as the
+  desktop app's do: on the canvas they are placed as layers, elsewhere opened.
+- **Leaving** (`quit`): once the Save Changes prompts are answered, the app
+  ends through the window's own close. `flush_autosaves` (finish the queued
+  crash-recovery writes and wait for them) is there for upstream's ending
+  without asking, when the window's GPU device is lost; this host switches to
+  software rendering instead (see Rendering), so nothing calls it yet.
 
 No control listener is opened by default. For an isolated test instance:
 

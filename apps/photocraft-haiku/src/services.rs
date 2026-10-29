@@ -3,13 +3,15 @@ use crate::host;
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
 use photocraft_format::RecoveryStore;
-use photocraft_ui_egui::{FileDialogAnswer, FileDialogReply, FileDialogRequest, Recoverable, Services};
+use photocraft_ui_egui::{FileDialogAnswer, FileDialogReply, FileDialogRequest, Recoverable, Services, screen_picker};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 pub const SIGNATURE: &str = "application/x-vnd.storytold-PhotoCraft";
+/// `B_CAPS_LOCK` (`<InterfaceDefs.h>`).
+const B_CAPS_LOCK: u32 = 0x8;
 static PENDING: Mutex<Option<(i32, bool, bool, FileDialogReply)>> = Mutex::new(None);
 static NEXT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(1);
 pub fn config_dir() -> Option<PathBuf> {
@@ -136,12 +138,14 @@ fn with_store<R>(store: &SharedRecovery, f: impl FnOnce(&mut RecoveryStore) -> R
 fn recovery_services(dir: Option<PathBuf>) -> Services {
     let recover_dir = dir.clone();
     let store: SharedRecovery = Rc::new(RefCell::new(dir.map(RecoveryStore::new)));
-    let (s1, s2, s4) = (store.clone(), store.clone(), store.clone());
+    let (s1, s2, s4, s5) = (store.clone(), store.clone(), store.clone(), store.clone());
     Services {
         autosave: Some(Box::new(move |doc: &Arc<Document>, revision: u64, path: Option<&str>| {
             with_store(&s1, |s| s.autosave_checked(doc, revision, path.map(str::to_string)))?
         })),
         autosave_results: Some(Box::new(move || with_store(&s4, |s| s.take_completed()).unwrap_or_default())),
+        // For a session that ends without asking (upstream: the window's GPU device was lost).
+        flush_autosaves: Some(Box::new(move || with_store(&s5, RecoveryStore::flush).unwrap_or_default())),
         discard_autosave: Some(Box::new(move |id: u64| {
             let _ = with_store(&s2, |s| s.discard(id));
         })),
@@ -241,6 +245,15 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;
             f.write_all(text.as_bytes()).map_err(|e| e.to_string())
         })),
+        // Preferences › General › Beep When Done: the "Beep" sound of the Sounds preferences.
+        beep: Some(host::beep),
+        // Caps Lock on: the painting tools show their precise cursor.
+        caps_lock: Some(Box::new(|| host::modifiers() & B_CAPS_LOCK != 0)),
+        // Appearance › Auto: the panel colour of the Appearance preferences, read at each frame
+        // (a change sends B_COLORS_UPDATED, which wakes the interface).
+        system_theme: Some(Box::new(|_| Some(if host::dark() { egui::Theme::Dark } else { egui::Theme::Light }))),
+        read_displays: Some(Arc::new(|| Some(read_displays()))),
+        screen_pick: Some(Box::new(screen_pick)),
         // Native refs arrive through the host event queue.
         os_events: None,
         // Set by main, which starts loading the store before the window opens.
@@ -248,4 +261,75 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         is_wayland: false,
         ..recovery_services(recovery_dir())
     }
+}
+
+/// Reads the displays and their profiles on a thread of its own (`Services::read_displays`).
+pub fn read_displays() -> std::sync::mpsc::Receiver<photocraft_ui_egui::monitor_status::Detection> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("display profiles".into()).spawn(move || {
+        let dir = crate::displays::profiles_dir();
+        // Made at the first read, so the user finds where profiles go.
+        if let Some(d) = &dir
+            && let Err(e) = std::fs::create_dir_all(d)
+        {
+            log::debug!(target: "photocraft_haiku", "{}: {e}", d.display());
+        }
+        let _ = tx.send(crate::displays::read(&host::displays(), dir.as_deref(), host::ui_scale()));
+    });
+    if let Err(e) = spawned {
+        log::warn!(target: "photocraft_haiku", "display profiles: {e}");
+    }
+    rx
+}
+
+/// The screen colour pick in progress: the answer's way back, and whether the interface stopped
+/// waiting for it.
+struct Pick {
+    id: i32,
+    tx: std::sync::mpsc::Sender<Result<screen_picker::Capture, String>>,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+    ctx: egui::Context,
+}
+static PICK: Mutex<Option<Pick>> = Mutex::new(None);
+
+/// `Services::screen_pick`: the native picker (`PickerWindow` in host.cpp) over a snapshot of the
+/// whole screen. The interface's own picker shows its snapshots in viewports of their own, which
+/// this host embeds in the window; the native one covers every monitor and answers one colour.
+fn screen_pick(ctx: &egui::Context) -> screen_picker::Pending {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let t = photocraft_ui_egui::i18n::t;
+    if host::screen_pick(id, t("Click to pick · Esc to cancel"), t("Scroll to zoom")) {
+        if let Ok(mut pick) = PICK.lock() {
+            *pick = Some(Pick { id, tx, cancelled: cancelled.clone(), ctx: ctx.clone() });
+        }
+    } else {
+        let _ = tx.send(Err("The screen couldn't be read".into()));
+    }
+    screen_picker::Pending { receiver: rx, cancelled }
+}
+
+/// The picker's answer (a [`host::kind::SCREEN_PICK`] event): the pixel `rgb` (0xRRGGBB) at the
+/// screen point (`x`, `y`), converted to sRGB through its display's profile, or no colour.
+pub fn pick_answer(id: i32, picked: bool, rgb: u32, x: f32, y: f32) {
+    let Some(pick) = PICK.lock().ok().and_then(|mut p| p.take_if(|p| p.id == id)) else { return };
+    let answer = if picked {
+        let [_, r, g, b] = rgb.to_be_bytes();
+        let profile = crate::displays::profile_at(&host::displays(), crate::displays::profiles_dir().as_deref(), f64::from(x), f64::from(y));
+        crate::displays::to_srgb([r, g, b], profile.as_deref()).map(|c| screen_picker::Capture::Color(Some(c)))
+    } else {
+        Ok(screen_picker::Capture::Color(None))
+    };
+    let _ = pick.tx.send(answer);
+    pick.ctx.request_repaint();
+}
+
+/// Closes the picker when the interface stopped waiting for its pick (another document became
+/// active, a dialog opened). Called every frame.
+pub fn check_pick() {
+    let Some(id) = PICK.lock().ok().and_then(|mut p| p.take_if(|p| p.cancelled.load(std::sync::atomic::Ordering::Relaxed))).map(|p| p.id) else {
+        return;
+    };
+    host::screen_pick_cancel(id);
 }

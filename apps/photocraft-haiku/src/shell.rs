@@ -2,6 +2,8 @@
 //! its frame, and egui's output goes back to the window and the system (title, cursor,
 //! clipboard, links) and, through the software rasteriser, to the screen.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -41,6 +43,32 @@ pub struct Shell {
     woken_for: Arc<Mutex<Option<Instant>>>,
     screenshots: Vec<egui::ScreenshotCallback>,
     title: String,
+    /// Native menu clicks for its backend (`native_menu.rs`).
+    menu_clicks: crate::native_menu::Clicks,
+    /// Set by `Services::quit` once leaving is settled.
+    quit_asked: Rc<Cell<bool>>,
+    /// [`Self::dev`] for `Services::cursor_pos`.
+    dev_shared: Rc<Cell<f32>>,
+    /// Where files were dropped (logical pixels), for `Services::cursor_pos` in the frame that
+    /// opens them, and the files.
+    drop_at: Rc<Cell<Option<(f32, f32)>>>,
+    dropped: Vec<egui::DroppedFileHandle>,
+    /// The last mouse event was a pen's.
+    pen: bool,
+}
+
+/// A file dropped on the window, as egui hands it to the interface.
+#[derive(Debug)]
+struct DroppedPath(std::path::PathBuf);
+
+impl egui::DroppedFile for DroppedPath {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
 }
 
 /// egui's cursor as one of Haiku's `BCursorID`s.
@@ -144,6 +172,33 @@ impl Shell {
             }
             host::wake();
         });
+        // The services that need the window: where the pointer is, leaving, the menu bar.
+        let dev_shared = Rc::new(Cell::new(dev));
+        let drop_at: Rc<Cell<Option<(f32, f32)>>> = Rc::default();
+        let (d, at) = (dev_shared.clone(), drop_at.clone());
+        app.services.cursor_pos = Some(Box::new(move |ctx: &egui::Context| {
+            let (x, y) = at.get().or_else(host::cursor)?;
+            let k = d.get() / ctx.pixels_per_point();
+            Some(pos2(x * k, y * k))
+        }));
+        let quit_asked: Rc<Cell<bool>> = Rc::default();
+        let asked = quit_asked.clone();
+        app.services.quit = Some(Box::new(move || {
+            asked.set(true);
+            host::wake();
+        }));
+        let menu_clicks = crate::native_menu::Clicks::default();
+        if std::env::var("PHOTOCRAFT_NATIVE_MENU").as_deref() != Ok("0") {
+            let backend = crate::native_menu::HaikuMenu::new(crate::native_menu::HostSink, menu_clicks.clone());
+            app.services.native_menu = Some(photocraft_ui_egui::native_menu::NativeMenu::new(Box::new(backend)));
+        }
+        // The monitor profiles, read before the first frame if that's quick (as the desktop app
+        // does), else applied when they arrive.
+        let displays = services::read_displays();
+        match displays.recv_timeout(Duration::from_millis(250)) {
+            Ok(r) => photocraft_ui_egui::monitor_status::apply(&mut app, r),
+            Err(_) => photocraft_ui_egui::monitor_status::pending(&mut app, displays),
+        }
         Ok(Self {
             app,
             gpu,
@@ -167,6 +222,12 @@ impl Shell {
             woken_for,
             screenshots: Vec::new(),
             title: String::new(),
+            menu_clicks,
+            quit_asked,
+            dev_shared,
+            drop_at,
+            dropped: Vec::new(),
+            pen: false,
         })
     }
 
@@ -242,7 +303,38 @@ impl Shell {
         if (dev - self.dev).abs() > f32::EPSILON {
             log::info!(target: "photocraft_haiku", "display density {} -> {dev}", self.dev);
             self.dev = dev;
+            self.dev_shared.set(dev);
             self.native_ppp = self.ui_scale * dev;
+        }
+    }
+
+    /// A pen tablet's sample with a mouse event goes to the canvas's stylus feed before the
+    /// pointer move it belongs to (see `tablet.rs`).
+    fn tablet(&mut self, ev: &RawEvent) {
+        let raw = crate::tablet::Raw {
+            tablet: ev.tablet,
+            pressure: ev.pressure,
+            tilt: (ev.has_tilt != 0).then_some((ev.tilt_x, ev.tilt_y)),
+            eraser: ev.eraser != 0,
+            subtype: ev.subtype,
+        };
+        match crate::tablet::update(raw) {
+            crate::tablet::Update::Pen(sample) => {
+                self.pen = true;
+                self.app.stylus.feed.set(Some(sample));
+            }
+            crate::tablet::Update::Keep => {
+                if ev.kind == kind::MOUSE_DOWN
+                    && let Some(touch) = crate::tablet::contact(self.app.stylus.feed.get())
+                {
+                    self.app.stylus.feed.set(Some(touch));
+                }
+            }
+            crate::tablet::Update::Mouse => {
+                if std::mem::take(&mut self.pen) {
+                    self.app.stylus.feed.set(None);
+                }
+            }
         }
     }
 
@@ -268,6 +360,7 @@ impl Shell {
     fn event(&mut self, ev: RawEvent, text: String) {
         match ev.kind {
             kind::MOUSE_MOVED | kind::MOUSE_DOWN | kind::MOUSE_UP => {
+                self.tablet(&ev);
                 self.set_modifiers(ev.modifiers);
                 let pos = self.pos(ev.x, ev.y);
                 self.events.push(Event::PointerMoved(pos));
@@ -304,10 +397,9 @@ impl Shell {
                 }
             }
             kind::CLOSE | kind::QUIT_REQUESTED => self.close_requested = true,
-            // Tracker's Open, Open With and drops on the icon, and files dropped on the
-            // window: they open as PDFs, as File › Open opens them (the desktop app
-            // opens dropped files the same way).
-            kind::OPEN_FILES | kind::DROPPED_FILES => {
+            // Tracker's Open, Open With and drops on the icon: they open as documents, as
+            // File › Open opens them.
+            kind::OPEN_FILES => {
                 for path in text.lines().filter(|l| !l.is_empty()) {
                     if let Err(e) = self.app.open_path(path) {
                         self.app.open_failed(path, &e);
@@ -315,6 +407,16 @@ impl Shell {
                 }
                 host::window_command(WindowCommand::Activate);
             }
+            // Files dropped on the window go to the interface as the desktop app's do: on the
+            // canvas they are placed as layers, elsewhere opened (where: `Services::cursor_pos`).
+            kind::DROPPED_FILES => {
+                self.drop_at.set(Some((ev.x, ev.y)));
+                for path in text.lines().filter(|l| !l.is_empty()) {
+                    self.dropped.push(Arc::new(DroppedPath(path.into())));
+                }
+            }
+            kind::MENU => self.menu_clicks.borrow_mut().push(ev.id),
+            kind::SCREEN_PICK => services::pick_answer(ev.id, ev.x != 0.0, ev.buttons as u32, ev.dx, ev.dy),
             kind::DIALOG_ANSWER => services::answer(ev.id, ev.x != 0.0, &text),
             kind::COLORS => self.check_density(),
             // The next frame picks up the new size, position or state.
@@ -409,6 +511,7 @@ impl Shell {
             time: Some(self.start.elapsed().as_secs_f64()),
             predicted_dt: 1.0 / 60.0,
             events: std::mem::take(&mut self.events),
+            dropped_files: std::mem::take(&mut self.dropped),
             focused: self.focused,
             system_theme: Some(if host::dark() { Theme::Dark } else { Theme::Light }),
             ..Default::default()
@@ -424,6 +527,11 @@ impl Shell {
         });
 
         self.frame_info.cpu_usage = Some(t0.elapsed().as_secs_f32());
+        self.drop_at.set(None);
+        services::check_pick();
+        if self.quit_asked.get() {
+            self.quit = true;
+        }
 
         // The system side of egui's output.
         host::set_cursor(cursor_id(out.platform_output.cursor_icon));

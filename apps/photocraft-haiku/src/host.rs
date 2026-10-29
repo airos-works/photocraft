@@ -21,6 +21,16 @@ pub struct RawEvent {
     pub dx: f32,
     pub dy: f32,
     pub text_len: u32,
+    /// A pen tablet's state with a mouse event (see [`crate::tablet`]): 1 with a sample, 2 for a
+    /// tablet's message without one, 0 otherwise.
+    pub tablet: i32,
+    pub pressure: f32,
+    pub tilt_x: f32,
+    pub tilt_y: f32,
+    pub has_tilt: i32,
+    pub eraser: i32,
+    /// `be:device_subtype`, -1 when the message had none.
+    pub subtype: i32,
 }
 
 #[repr(C)]
@@ -55,6 +65,8 @@ pub mod kind {
     pub const MOVED: i32 = 16;
     pub const MINIMIZED: i32 = 17;
     pub const COLORS: i32 = 18;
+    pub const MENU: i32 = 19;
+    pub const SCREEN_PICK: i32 = 20;
 }
 
 unsafe extern "C" {
@@ -88,6 +100,13 @@ unsafe extern "C" {
     fn pc_host_alert(title: *const c_char, text: *const c_char);
     fn pc_host_type_file(path: *const c_char) -> i32;
     fn pc_host_claim_types(signature: *const c_char, types: *const c_char) -> i32;
+    fn pc_menu_build(spec: *const c_char);
+    fn pc_menu_update(spec: *const c_char);
+    fn pc_host_screen_pick(id: i32, hint: *const c_char, wheel_hint: *const c_char) -> i32;
+    fn pc_host_screen_pick_cancel(id: i32);
+    fn pc_host_cursor(x: *mut f32, y: *mut f32) -> i32;
+    fn pc_host_beep();
+    fn pc_host_displays() -> *mut c_char;
 }
 
 /// Text for C: interior NULs (never in what we pass) are dropped rather than failing.
@@ -473,4 +492,52 @@ pub fn alert(title: &str, text: &str) {
     let (t, x) = (c(title), c(text));
     // SAFETY: valid C strings; the alert copies them.
     unsafe { pc_host_alert(t.as_ptr(), x.as_ptr()) }
+}
+
+/// Replaces the window's native menu bar with one built from `spec` (the format is in
+/// `BuildMenuBar` in host.cpp and [`crate::native_menu`]); an empty spec removes it.
+pub fn menu_build(spec: &str) {
+    let s = c(spec);
+    // SAFETY: a valid C string; the host copies what it needs.
+    unsafe { pc_menu_build(s.as_ptr()) }
+}
+
+/// Updates native menu items in place (index, label, enabled, checked per line).
+pub fn menu_update(spec: &str) {
+    let s = c(spec);
+    // SAFETY: a valid C string; the host copies what it needs.
+    unsafe { pc_menu_update(s.as_ptr()) }
+}
+
+/// Shows the screen colour picker; its answer comes back as a [`kind::SCREEN_PICK`] event with
+/// `id`. False when the screen couldn't be read.
+pub fn screen_pick(id: i32, hint: &str, wheel_hint: &str) -> bool {
+    let (h, w) = (c(hint), c(wheel_hint));
+    // SAFETY: valid C strings; the picker copies them.
+    unsafe { pc_host_screen_pick(id, h.as_ptr(), w.as_ptr()) == 0 }
+}
+
+/// Closes the picker of pick `id` if it is still up (it then answers "no colour").
+pub fn screen_pick_cancel(id: i32) {
+    // SAFETY: no pointers.
+    unsafe { pc_host_screen_pick_cancel(id) }
+}
+
+/// Where the pointer is, in the canvas view's logical pixels (also outside the window).
+pub fn cursor() -> Option<(f32, f32)> {
+    let (mut x, mut y) = (0.0, 0.0);
+    // SAFETY: two writable floats.
+    (unsafe { pc_host_cursor(&mut x, &mut y) } != 0).then_some((x, y))
+}
+
+/// The system beep (the "Beep" sound event of the Sounds preferences).
+pub fn beep() {
+    // SAFETY: no arguments.
+    unsafe { pc_host_beep() }
+}
+
+/// The displays as the host lists them (see [`crate::displays::parse`]).
+pub fn displays() -> String {
+    // SAFETY: no arguments; the host returns a strdup'd string.
+    take_string(unsafe { pc_host_displays() })
 }
