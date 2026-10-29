@@ -268,6 +268,10 @@ struct Window {
     composing: bool,
     /// The caret last told to the platform for input methods (logical pixels).
     ime_caret: Option<[f32; 4]>,
+    /// The editor's last IME reset request the input method was stopped for, and the one whose
+    /// completion the next pass reports, after the input queued before it ([`finish`]).
+    ime_reset: Option<egui::ImeResetId>,
+    ime_reset_done: Option<egui::ImeResetId>,
 }
 
 impl Window {
@@ -291,6 +295,8 @@ impl Window {
             wheel_end_next: None,
             composing: false,
             ime_caret: None,
+            ime_reset: None,
+            ime_reset_done: None,
         }
     }
 
@@ -624,6 +630,9 @@ impl<P: Platform> Shared<P> {
         }
         let end_next = available.then(|| w.wheel_end.take()).flatten();
         w.wheel_end_next = end_next;
+        if available && let Some(request_id) = w.ime_reset_done.take() {
+            w.events.push(Event::ImeResetCompleted { request_id });
+        }
         let input = RawInput {
             viewport_id: viewport,
             viewports: std::iter::empty().collect(),
@@ -790,21 +799,38 @@ fn finish<P: Platform>(shared: &Rc<RefCell<Shared<P>>>, ctx: &Context, viewport:
     if let Some(n) = native {
         s.platform.set_cursor(n, platform_output.cursor_icon);
         // The input method follows this window's caret, and stops when its editor interrupts
-        // the composition or nothing here takes typing any more.
+        // the composition or nothing here takes typing any more. An editor that settles a
+        // composition itself (the type tool) asks for a reset (`IMEOutput::reset_request`) and
+        // ignores the input method until the reset is reported done (`Event::ImeResetCompleted`):
+        // the input method is stopped (the platform drops what it sends until it starts again),
+        // and the next pass reports it after the input queued before it.
         let ime = platform_output.ime.as_ref();
         let k = pixels_per_point / s.scale;
         let caret = ime.map(|o| o.cursor_rect).filter(|r| r.is_finite()).map(|r| [r.min.x * k, r.min.y * k, r.max.x * k, r.max.y * k]);
+        let mut reset_done = false;
         if let Some(w) = s.windows.get_mut(&viewport) {
             if caret != w.ime_caret {
                 w.ime_caret = caret;
                 s.platform.ime_caret(n, caret);
             }
-            if ime.is_none_or(|o| o.should_interrupt_composition) {
+            let reset = ime
+                .and_then(|o| o.reset_request)
+                .filter(|id| id.viewport_id() == viewport && w.ime_reset.is_none_or(|last| id.as_u64() > last.as_u64()));
+            if ime.is_none_or(|o| o.should_interrupt_composition) || reset.is_some() {
                 s.platform.ime_stop(n);
                 if std::mem::take(&mut w.composing) {
                     w.events.push(Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
                 }
             }
+            if let Some(id) = reset {
+                w.ime_reset = Some(id);
+                w.ime_reset_done = Some(id);
+                reset_done = true;
+            }
+        }
+        if reset_done {
+            let owner = s.owner(viewport);
+            s.due.insert(owner, Instant::now());
         }
     }
     for command in &platform_output.commands {

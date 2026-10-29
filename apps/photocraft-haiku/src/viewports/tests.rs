@@ -367,3 +367,39 @@ fn a_new_window_follows_its_builder() {
     assert!(!s.decorations && !s.resizable && s.floating && s.visible);
     assert_eq!(s.buttons, [false, true, true]);
 }
+
+#[test]
+fn an_ime_reset_stops_the_input_method_and_completes_after_the_queued_input() {
+    let (ctx, v, log) = driver();
+    let seen: Seen = Rc::default();
+    let requested: Rc<RefCell<Option<egui::ImeResetId>>> = Rc::default();
+    let editor = |ui: &mut egui::Ui, reset: bool| {
+        let id = ui.ctx().viewport_id();
+        seen.borrow_mut().push((id, ui.input(|i| i.raw.events.clone()), false));
+        let mut ime = egui::output::IMEOutput::new(egui::Id::unique("editor"), 1, egui::IMEPurpose::Normal, egui::Rect::ZERO, egui::Rect::ZERO);
+        if reset {
+            ime.reset_request = ui.ctx().request_ime_reset(id);
+            *requested.borrow_mut() = ime.reset_request;
+        }
+        ui.ctx().output_mut(|o| o.ime = Some(ime));
+    };
+    frame(&ctx, &v, |ui| editor(ui, false));
+    log.borrow_mut().ime_stops.clear();
+    // The editor settles the composition and asks for a reset.
+    frame(&ctx, &v, |ui| editor(ui, true));
+    assert_eq!(log.borrow().ime_stops, [ROOT_WINDOW], "the input method stopped");
+    let id = requested.borrow().unwrap_or_else(|| panic!("no reset id"));
+    // Input that was queued before the next pass comes before the completion.
+    v.input(ROOT_WINDOW, WindowInput::Commit("old"));
+    assert!(v.take_due().contains(&ViewportId::ROOT));
+    seen.borrow_mut().clear();
+    frame(&ctx, &v, |ui| editor(ui, false));
+    let events = seen.borrow()[0].1.clone();
+    let commit = events.iter().position(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Commit(_))));
+    let done = events.iter().position(|e| matches!(e, egui::Event::ImeResetCompleted { request_id } if *request_id == id));
+    assert!(commit.is_some() && done.is_some() && commit < done, "{events:?}");
+    // Once.
+    seen.borrow_mut().clear();
+    frame(&ctx, &v, |ui| editor(ui, false));
+    assert!(!seen.borrow()[0].1.iter().any(|e| matches!(e, egui::Event::ImeResetCompleted { .. })));
+}

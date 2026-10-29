@@ -209,6 +209,16 @@ frame. The shell runs the editor's frame in the root viewport's pass; a close
 request for another window gets one more pass, in which the window closes once
 the app has stopped showing it.
 
+The type tool settles a composition itself and asks for an IME reset
+(`IMEOutput::reset_request`), then ignores the input method (`reset_guarded`)
+until the reset is reported done. `src/viewports.rs` answers it as DeckCraft's
+host does: the window's input method is stopped and the next pass reports
+`Event::ImeResetCompleted`, after the input queued before it. The host has no
+input method support yet (`host.cpp` takes no `B_INPUT_METHOD_EVENT`, and the
+platform's `ime_caret`/`ime_stop` do nothing), so today only typed text reaches
+the type tool; the answer keeps it from waiting forever once compositions
+arrive.
+
 `tools/haiku/window-probe.cpp` (its comment says how to build it on air/OS)
 lists a running copy's windows (frame, look, feel, active) and sends pointer
 drags and clicks at screen points the way the input server does, for testing
