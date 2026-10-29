@@ -1,4 +1,7 @@
 //! One background check at startup and a non-modal window for release information.
+//!
+//! air/OS installs and updates PhotoCraft as a package (pkgman, SoftwareUpdater): there Check for
+//! Updates only says so, and upstream's release downloads aren't offered.
 
 use photocraft_engine::updates_cmds::Status;
 use serde_json::Value;
@@ -37,6 +40,11 @@ fn release_of(found: &photocraft_engine::updates_cmds::Release) -> craft_update:
 }
 
 pub(crate) fn check(app: &mut PhotocraftApp, _ctx: &egui::Context, params: Value) -> Result<Value, String> {
+    // air/OS: the window only says that SoftwareUpdater updates the package (`show`).
+    if cfg!(target_os = "haiku") {
+        app.ui.updates_open = true;
+        return Ok(serde_json::json!({"supported": false}));
+    }
     let before = app.session.updates.status.clone();
     let result = app.run("help.checkForUpdates", params);
     // A check that fails to start still shows its failure and Check Again; the command error
@@ -121,6 +129,10 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             let t = crate::theme::Tokens::get(ctx);
             ui.label(crate::i18n::fmt(crate::i18n::t("Installed version: {version}"), &[("version", photocraft_engine::build_info::VERSION)]));
             ui.add_space(8.0);
+            if cfg!(target_os = "haiku") {
+                ui.label(tl!("PhotoCraft is updated with the system's packages: SoftwareUpdater installs newer versions."));
+                return;
+            }
             match &status {
                 Status::Checking => {
                     ui.horizontal(|ui| {

@@ -181,6 +181,10 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             items.insert(after + 1 + k, it);
         }
     }
+    // air/OS updates the package (SoftwareUpdater), not from upstream's downloads.
+    if cfg!(target_os = "haiku") {
+        items.retain(|i| i.id != "help.checkForUpdates");
+    }
     // Keep the update command with the links, ahead of System Info and About.
     if let Some(at) = items.iter().position(|i| i.id == "help.checkForUpdates") {
         let update = items.remove(at);

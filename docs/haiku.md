@@ -111,6 +111,17 @@ Native close/quit requests respect the editor's unsaved-changes dialog.
 Settings live in `~/config/settings/PhotoCraft`. `PHOTOCRAFT_CONFIG_DIR` selects
 an isolated directory, and `PHOTOCRAFT_NO_RECOVERY=1` disables recovery for tests.
 
+### Updates
+
+PhotoCraft is a package on air/OS, updated by pkgman and SoftwareUpdater, and
+`craft-update` has no Haiku platform; the start-up check is off (the host gives
+no `check_updates` service). Help › Check for Updates is left out of the menus
+and the command search, and the command itself (automation) only opens the
+updates window saying that SoftwareUpdater installs newer versions. The
+community links (Help › Discord, the Discord button on the start screen and in
+About) stay: they open the web browser, and upstream has no switch for the host
+to hide them.
+
 ### System services
 
 The host fills in the editor's platform services (`Services` in
