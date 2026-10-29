@@ -29,6 +29,13 @@ while IFS= read -r license; do
     mkdir -p "$DOCS/licenses/$(dirname -- "$license")"
     cp "$license" "$DOCS/licenses/$license"
 done < <(rg --files assets crates vendor apps/photocraft-haiku tools/haiku | rg '(^|/)(LICENSE[^/]*|OFL[^/]*|COPYING[^/]*)$')
+# The craft-fonts build embeds OFL-1.1 fonts: their licences, one per font family.
+if [[ -n ${CRAFT_FONTS_DIR-"$ROOT/../craft-fonts"} ]]; then
+    for ofl in "${CRAFT_FONTS_DIR-"$ROOT/../craft-fonts"}"/fonts/*/OFL.txt; do
+        mkdir -p "$DOCS/licenses/craft-fonts"
+        cp "$ofl" "$DOCS/licenses/craft-fonts/OFL-$(basename -- "$(dirname -- "$ofl")").txt"
+    done
+fi
 mkdir -p "$DOCS/licenses/epaint_default_fonts"
 cp "$CARGO_HOME"/registry/src/*/epaint_default_fonts-0.36.2/fonts/*.txt "$DOCS/licenses/epaint_default_fonts/"
 ln -s ../../../../apps/PhotoCraft "$STAGE/data/deskbar/menu/Applications/PhotoCraft"

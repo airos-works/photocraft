@@ -56,8 +56,8 @@ package does not install or replace graphics drivers. AMD was tested with RADV.
 NVIDIA was tested with the air/OS NVK/NVRM runtime. If necessary, choose a matching
 ICD for this process with `VK_ICD_FILENAMES=/path/to/icd.json`.
 
-On the validation X399, the system manifests pointed to AMD despite its NVIDIA
-card. Validation used a private NVK runtime under
+For 0.10.0, the X399's system manifests pointed to AMD despite its NVIDIA
+card (by the 0.17.0 validation its system NVK worked as is). Validation used a private NVK runtime under
 `/boot/home/PhotoCraft-validation/runtime` and the `nvk.json` manifest there.
 The installed `photocraft-nvidia` command in
 `/boot/home/config/non-packaged/bin` launches PhotoCraft with that private ICD;
@@ -73,7 +73,17 @@ bash tools/haiku/package.sh --no-build
 ```
 
 The scripts build the tier-3 Rust target `x86_64-unknown-haiku`, including its
-standard library, and cross-compile the small C++ Be API boundary. Panic
+standard library, and cross-compile the small C++ Be API boundary.
+
+Like upstream's releases, the build embeds the
+[craft-fonts](https://github.com/storytold/craft-fonts) collection (Japanese,
+Chinese, Korean, Arabic, Hebrew, Thai, Devanagari, Georgian and symbol faces,
+for the interface and the text tool; `crates/text/build.rs`): `build.sh` takes
+it from `../craft-fonts` beside this checkout, or from `CRAFT_FONTS_DIR`, and
+fails without it; `CRAFT_FONTS_DIR=` (empty) builds without. Check out the
+commit upstream's workflows pin (`craft-fonts-ref`, `b076417b5880` for 0.17.0).
+The fonts add about 35 MB to the executable; `package.sh` ships their OFL
+licences under `licenses/craft-fonts/`. Panic
 unwinding stays enabled. `tools/haiku/env.sh` supplies the workspace defaults for
 `RUSTUP_HOME`, `CARGO_HOME`, `HAIKU_SYSROOT`, `HAIKU_CROSS` and `CARGO_TARGET_DIR`;
 these can be overridden. The packaging script also accepts `HAIKU_HOST_TOOLS`
@@ -196,10 +206,36 @@ benchmarks repeated opacity changes, simulates GPU loss, checks full software
 fallback, and saves afterward. It changes the test instance's GPU preference.
 The native clipboard/key probes under `tools/haiku/` exercise Be API integration.
 
-## Hardware results — 18 October 2026
+## Hardware results
 
-These results, and [`haiku-validation.json`](haiku-validation.json), are for PhotoCraft
-0.10.0 (`0.10.0~airos1-2`). They have not been repeated since the 0.17.0 merge below.
+### 0.17.0 on the X399 — 29 October 2026
+
+`tools/haiku/validate.py` against 0.17.0 with the HAIKU5 host and craft-fonts, on
+the X399 (GTX 1070, the system's NVK Mesa 25.3.0-devel, 200 %; no private
+Vulkan runtime is needed any more), recorded under `revalidation_0_17` in
+[`haiku-validation.json`](haiku-validation.json):
+
+| Device / driver | Vulkan median | CPU median | CPU/Vulkan ratio |
+|---|---:|---:|---:|
+| X399, NVIDIA GTX 1070, NVK Mesa 25.3.0-devel | 47.3 ms | 791.4 ms | 16.7× |
+
+Vulkan is twice as fast as with 0.10.0 (97.3 ms): the changed-tile presentation
+and upstream's damage tracking. Simulated GPU loss switched the canvas and the
+window to software and editing and saving went on. A native `image/bitmap`
+pasted as a layer of its size, and Copy Merged put both PNG and a native bitmap
+on the clipboard. The Japanese interface is drawn in full (the build without
+craft-fonts shows missing-glyph boxes). The system services above were checked
+on the same machine: tablet strokes from `tablet-probe` (no tablet is attached),
+a monitor profile in `ColorProfiles`, the screen picker with and without it,
+the menu bar, and quitting.
+
+An arm64 build cross-compiles with the airos-ci toolchain (its
+`aarch64-unknown-haiku` target and the arm64 SDK); it has not been run on an
+arm64 machine yet. The Framework 13 results below are still 0.10.0's.
+
+### 0.10.0 — 18 October 2026
+
+These results are for PhotoCraft 0.10.0 (`0.10.0~airos1-2`).
 
 Both GPUs rendered the full editor at 1.75× density. The layered 640×480 fixture
 contains a soft brush stroke, a Multiply layer and a brightness/contrast
@@ -225,7 +261,7 @@ not GPU kernel timings or claims about every filter.
 | Device / driver | Vulkan median | CPU median | CPU/Vulkan ratio |
 |---|---:|---:|---:|
 | Laptop, AMD Radeon 760M, RADV Mesa 25.3.6 | 57.6 ms | 467.1 ms | 8.1× |
-| X399, NVIDIA GTX 1070, NVK Mesa 25.3.0-devel | 97.3 ms | 906.7 ms | 9.3× |
+| X399, NVIDIA GTX 1070, NVK Mesa 25.3.0-devel (private runtime) | 97.3 ms | 906.7 ms | 9.3× |
 
 The native Open panel opened/cancelled and Save As wrote a correctly typed PSD
 on the laptop. The metadata dependency's 16 unit tests also passed on both

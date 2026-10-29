@@ -1,4 +1,192 @@
 {
+  "revalidation_0_17": {
+    "date": "2026-10-29",
+    "version": "0.17.0 (upstream 69b8fd9c14b2), air/OS host with the HAIKU5 changes, craft-fonts b076417 embedded",
+    "device": "X399 workstation, NVIDIA GeForce GTX 1070, NVK Mesa 25.3.0-devel (git-ef7f9813e0, the system ICD; no private runtime needed any more), air/OS hrev60207+2112, 3840x2160 at 200 %",
+    "benchmark_nvidia": {
+      "size": [
+        6000,
+        4000
+      ],
+      "depth": 8,
+      "layers": 3,
+      "warmups": 2,
+      "samples": 8,
+      "vulkan": {
+        "samples": [
+          {
+            "endToEndMs": 56.94899999980407,
+            "compositeMs": 15.272999999986496,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 47.35700000037468,
+            "compositeMs": 15.178000000014435,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 47.453000000132306,
+            "compositeMs": 15.173000000009779,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 47.238000000106695,
+            "compositeMs": 15.132999999972526,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 46.30500000075699,
+            "compositeMs": 15.073999999993248,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 47.41400000057183,
+            "compositeMs": 15.130999999993946,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 47.28499999964697,
+            "compositeMs": 15.13200000001234,
+            "uploadMs": 0.0
+          },
+          {
+            "endToEndMs": 47.03300000073796,
+            "compositeMs": 15.185000000026776,
+            "uploadMs": 0.0
+          }
+        ],
+        "medianMs": 47.32100000001083,
+        "gpuInfo": {
+          "adapter": "NVIDIA GeForce GTX 1070 (NVK GP104-A)",
+          "adapters": [
+            "NVIDIA GeForce GTX 1070 (NVK GP104-A)"
+          ],
+          "backend": "vulkan",
+          "canvas": "gpu",
+          "deviceType": "discreteGpu",
+          "driver": "NVK Mesa 25.3.0-devel (git-ef7f9813e0)",
+          "fallback": null,
+          "lost": null,
+          "preference": "vulkan",
+          "present": "changed tiles read back",
+          "selected": "auto",
+          "videoMemoryMb": null
+        }
+      },
+      "simulatedLoss": {
+        "gpuInfo": {
+          "adapter": "NVIDIA GeForce GTX 1070 (NVK GP104-A)",
+          "adapters": [
+            "NVIDIA GeForce GTX 1070 (NVK GP104-A)"
+          ],
+          "backend": "vulkan",
+          "canvas": "cpu",
+          "deviceType": "discreteGpu",
+          "driver": "NVK Mesa 25.3.0-devel (git-ef7f9813e0)",
+          "fallback": null,
+          "lost": "GPU device lost: simulated (ui.gpu.simulateLoss)",
+          "preference": "vulkan",
+          "present": "changed tiles read back",
+          "selected": "auto",
+          "videoMemoryMb": null
+        },
+        "wasActive": true
+      },
+      "afterLoss": {
+        "adapter": "NVIDIA GeForce GTX 1070 (NVK GP104-A)",
+        "adapters": [
+          "NVIDIA GeForce GTX 1070 (NVK GP104-A)"
+        ],
+        "backend": "vulkan",
+        "canvas": "cpu",
+        "deviceType": "discreteGpu",
+        "driver": "NVK Mesa 25.3.0-devel (git-ef7f9813e0)",
+        "fallback": null,
+        "lost": "GPU device lost: simulated (ui.gpu.simulateLoss)",
+        "preference": "vulkan",
+        "present": "native software bitmap",
+        "selected": "auto",
+        "videoMemoryMb": null
+      },
+      "cpu": {
+        "samples": [
+          {
+            "endToEndMs": 691.0829999997077,
+            "compositeMs": 458.4099999999744,
+            "uploadMs": 134.11800000001676
+          },
+          {
+            "endToEndMs": 692.4380000000383,
+            "compositeMs": 429.26499999998487,
+            "uploadMs": 151.5229999999865
+          },
+          {
+            "endToEndMs": 810.0679999997737,
+            "compositeMs": 561.5560000000114,
+            "uploadMs": 147.3080000000191
+          },
+          {
+            "endToEndMs": 856.5699999999197,
+            "compositeMs": 603.2740000000049,
+            "uploadMs": 145.09699999997974
+          },
+          {
+            "endToEndMs": 731.3679999997476,
+            "compositeMs": 511.08400000000256,
+            "uploadMs": 133.9310000000114
+          },
+          {
+            "endToEndMs": 839.5290000007662,
+            "compositeMs": 589.0600000000268,
+            "uploadMs": 137.9320000000007
+          },
+          {
+            "endToEndMs": 890.5940000004193,
+            "compositeMs": 651.5049999999756,
+            "uploadMs": 137.83600000001024
+          },
+          {
+            "endToEndMs": 772.7189999995971,
+            "compositeMs": 531.2399999999907,
+            "uploadMs": 145.45100000000093
+          }
+        ],
+        "medianMs": 791.3934999996854,
+        "gpuInfo": {
+          "adapter": "NVIDIA GeForce GTX 1070 (NVK GP104-A)",
+          "adapters": [
+            "NVIDIA GeForce GTX 1070 (NVK GP104-A)"
+          ],
+          "backend": "vulkan",
+          "canvas": "cpu",
+          "deviceType": "discreteGpu",
+          "driver": "NVK Mesa 25.3.0-devel (git-ef7f9813e0)",
+          "fallback": null,
+          "lost": "GPU device lost: simulated (ui.gpu.simulateLoss)",
+          "preference": "vulkan",
+          "present": "native software bitmap",
+          "selected": "auto",
+          "videoMemoryMb": null
+        }
+      },
+      "speedup": 16.72393863188657
+    },
+    "checks": {
+      "gpu_loss": "ui.gpu.simulateLoss switched the canvas to CPU and the window to the native software bitmap; edits and saves continued (validate.py)",
+      "native_clipboard": "a native image/bitmap (64x32) pasted as a 64x32 layer; Copy Merged put PNG and a native bitmap (200x100) on the clipboard; prior clipboard restored",
+      "craft_fonts": "Japanese interface (LANG=ja_JP.UTF-8) drawn in full; the installed 0.17.0~airos1-2 without craft-fonts shows missing-glyph boxes",
+      "tablet": "tools/haiku/tablet-probe.cpp strokes (HID and Wacom add-on messages; no tablet attached): width follows pressure from thin to full, the eraser end selects the Eraser and erases, a mouse click afterwards paints at full size",
+      "monitor_profile": "DELL P2415Q.icc (Adobe RGB 1998) in ~/config/settings/ColorProfiles: System Info reads \"Monitor profile on DELL P2415Q (main window): DELL P2415Q.icc (auto)\"; without it, sRGB fallback",
+      "screen_picker": "picked #3b5bdb raw with no profile and #205be0 through the Adobe RGB profile; Esc, a right click and the colour dialog closing cancel it",
+      "native_menu": "BMenuBar with the Haiku layout; items run through hey scripting (Help > System Info, File > Quit); PHOTOCRAFT_NATIVE_MENU=0 keeps the in-window menus",
+      "quit": "hey quit and File > Quit end the app through Services::quit"
+    },
+    "not_repeated": "The Framework 13 (AMD) results, pixel parity and PSD/pcraft round trips below are still from 0.10.0.",
+    "arm64": {
+      "build": "cross-built with the airos-ci toolchain (nightly-2026-09-15, sdk/targets/aarch64-unknown-haiku.json, the arm64 SDK of hrev60207-2112): an aarch64 PhotoCraft, 114.7 MB stripped",
+      "validation": "not run: no arm64 air/OS machine is reachable from the build host (the ROCK 5 ITX, Raspberry Pi 4 and Cubie boards are on the lab network behind the lab workstation), and QEMU has no Vulkan device for the GPU half of validate.py"
+    }
+  },
   "date": "2026-10-18",
   "upstream": "8d2e615ab93d",
   "benchmark_definition": "24 MP, 3 layers, opacity changes; command to next frame, including rendering/presentation",
