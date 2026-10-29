@@ -111,6 +111,21 @@ Native close/quit requests respect the editor's unsaved-changes dialog.
 Settings live in `~/config/settings/PhotoCraft`. `PHOTOCRAFT_CONFIG_DIR` selects
 an isolated directory, and `PHOTOCRAFT_NO_RECOVERY=1` disables recovery for tests.
 
+### Scrolling
+
+A mouse wheel scrolls in whole steps, as before. An air/OS touchpad's scroll
+gesture (`B_MOUSE_WHEEL_CHANGED` with `be:device_subtype` 2,
+`be:wheel_precise_delta_*` and `be:wheel_phase`, air/OS since 2026-10-27)
+reaches the editor as a Mac trackpad's does in the desktop app
+(`MouseWheelSource::Trackpad`): its unrounded steps become points (a step is
+egui's line, 40 points), with the gesture's start and end. The canvas then pans
+(or zooms, with the wheel's zoom modifier) with the fingers and without the
+wheel's easing, and egui's lists treat it as a trackpad. The end of a gesture
+that arrives with its last movement is held for the next frame (egui drops the
+deltas of a gesture that ended). air/OS's touchpad has no pinch gesture, so
+Zoom with Trackpad Pinch has nothing to act on: zoom with the wheel's modifier,
+the keys or the Zoom tool.
+
 ### Updates
 
 PhotoCraft is a package on air/OS, updated by pkgman and SoftwareUpdater, and
@@ -307,7 +322,7 @@ its own egui 0.37 and winit forks (`[patch.crates-io]`). The air/OS changes foll
   The air/OS host keeps its software fallback instead: it calls `forget_window_device` after
   `set_wgpu`, so a fault (including `ui.gpu.simulateLoss`) switches the canvas and window to CPU.
 - egui 0.37 delivers screenshots via `ScreenshotCallback`, and wheel events carry a
-  `MouseWheelSource` (`Unknown`: Haiku doesn't say what sent them). Import takes
+  `MouseWheelSource` (a wheel's or a touchpad's: see Scrolling). Import takes
   `ImportOptions`, and the clipboard image reader returns `Result<Option<_>>`.
 
 ## Native application icon (2026-10-26)
