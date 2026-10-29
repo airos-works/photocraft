@@ -119,9 +119,14 @@ it (`B_REFS_RECEIVED`), and a later launch from Terminal hands its arguments to
 it (`B_ARGV_RECEIVED`, relative paths resolved against the launch's folder) and
 ends before it touches the log, the preferences or the recovery records. Either
 way the documents open as tabs through the editor's own open path, as File ›
-Open does, and the window comes to the front (also for a launch without
-documents). The system matches a running copy by its executable file, not its
-signature, so a test build in another folder runs beside the installed one, each
+Open does, and the window comes to the front, un-minimized (also for a launch
+without documents: the Deskbar's `B_SILENT_RELAUNCH`, which `BApplication`
+alone answers by activating the team, leaving a minimized window down). The
+copy's own arguments, which `BApplication` posts to itself before
+`B_READY_TO_RUN` without a reply address (so `IsSourceRemote()` calls them
+remote), are left to the Rust side, which opened them already. The system
+matches a running copy by its executable file, not its signature, so a test
+build in another folder runs beside the installed one, each
 with its own recovery records. The desktop app gives automation (`--control`) a
 process of its own; one executable file can't have that here, so a `--control`
 launch while that file's copy runs ends with an error: run the test instance
