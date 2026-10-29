@@ -1,21 +1,15 @@
-//! Hardware rendering into a reusable offscreen target. Haiku has no wgpu surface handle;
-//! the native host presents the completed bitmap. Document compositing and egui triangles
-//! both use the real wgpu device. Readback cost is reported separately from GPU submission.
-use egui_wgpu::{RenderState, RendererOptions, ScreenDescriptor, WgpuConfiguration, WgpuSetup};
+//! Hardware rendering of the window. Haiku has no wgpu surface; egui's triangles and the document
+//! canvas draw into the presenter's frame texture (`present.rs`), which gets it onto the screen.
+use egui_wgpu::{RenderState, Renderer, RendererOptions, ScreenDescriptor, WgpuConfiguration, WgpuSetup};
 use photocraft_ui_egui::gpu_canvas;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Instant;
+
+use crate::present::{self, Presenter, Shown};
 
 pub struct Gpu {
     pub state: RenderState,
-    target: Option<Target>,
-    pixels: Vec<u32>,
-}
-struct Target {
-    size: [u32; 2],
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    readback: wgpu::Buffer,
-    stride: u32,
+    presenter: Presenter,
 }
 impl Gpu {
     pub fn new() -> Result<Self, String> {
@@ -31,49 +25,23 @@ impl Gpu {
         }));
         let instance = pollster::block_on(setup.new_instance());
         let config = WgpuConfiguration { wgpu_setup: setup, ..Default::default() };
-        let state = pollster::block_on(RenderState::create(&config, &instance, None, RendererOptions::default())).map_err(|e| e.to_string())?;
+        let mut state = pollster::block_on(RenderState::create(&config, &instance, None, RendererOptions::default())).map_err(|e| e.to_string())?;
+        // Frames are drawn in the screen's byte order: they go to the frame buffer, or into a
+        // B_RGB32 bitmap, as they are.
+        state.target_format = present::FORMAT;
+        state.renderer = Arc::new(egui::mutex::RwLock::new(Renderer::new(&state.device, present::FORMAT, RendererOptions::default())));
         log::info!(target: "photocraft_haiku", "air/OS GPU: {:?}", state.adapter.get_info());
-        Ok(Self { state, target: None, pixels: Vec::new() })
+        let presenter = Presenter::new(&state.device, &state.queue, present::Mode::from_env("PHOTOCRAFT_PRESENT"), &crate::host::Native);
+        log::info!(target: "photocraft_haiku", "air/OS present: {}", presenter.mode().name());
+        Ok(Self { state, presenter })
     }
     pub fn max_texture_side(&self) -> usize {
         self.state.device.limits().max_texture_dimension_2d as usize
     }
-    fn resize(&mut self, size: [u32; 2]) -> Result<(), String> {
-        if self.target.as_ref().is_some_and(|t| t.size == size) {
-            return Ok(());
-        }
-        let [w, h] = size;
-        let limit = self.state.device.limits().max_texture_dimension_2d;
-        if w == 0 || h == 0 || w > limit || h > limit {
-            return Err(format!("Window {w}x{h} exceeds GPU limit {limit}"));
-        }
-        let stride = w.checked_mul(4).and_then(|s| s.checked_add(255)).map(|s| s / 256 * 256).ok_or("Readback stride overflow")?;
-        let bytes = u64::from(stride) * u64::from(h);
-        // Bound allocations even when the window server sends unreasonable dimensions.
-        if bytes > self.state.device.limits().max_buffer_size.min(512 << 20) {
-            return Err("Window readback exceeds memory budget".into());
-        }
-        let texture = self.state.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("PhotoCraft native frame"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.state.target_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&Default::default());
-        let readback = self.state.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("PhotoCraft native readback"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        self.target = Some(Target { size, texture, view, readback, stride });
-        self.pixels.resize(w as usize * h as usize, 0);
-        Ok(())
+    pub fn present_mode(&self) -> present::Mode {
+        self.presenter.mode()
     }
+    /// Draws the frame and shows it (`scale` device pixels per logical pixel).
     pub fn render(
         &mut self,
         size: [u32; 2],
@@ -81,10 +49,10 @@ impl Gpu {
         delta: &egui::TexturesDelta,
         ppp: f32,
         clear: egui::Color32,
-    ) -> Result<(), String> {
-        self.resize(size)?;
-        let target = self.target.as_ref().ok_or("Missing frame target")?;
+        scale: f32,
+    ) -> Result<Shown, String> {
         let state = &self.state;
+        let view = self.presenter.target(size)?;
         let start = Instant::now();
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
         let mut encoder = state.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("PhotoCraft native frame") });
@@ -101,7 +69,7 @@ impl Gpu {
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("PhotoCraft native UI"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &target.view,
+                        view,
                         resolve_target: None,
                         depth_slice: None,
                         ops: wgpu::Operations {
@@ -117,58 +85,46 @@ impl Gpu {
                 .forget_lifetime();
             renderer.render(&mut pass, primitives, &screen);
         }
-        encoder.copy_texture_to_buffer(
-            target.texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &target.readback,
-                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(target.stride), rows_per_image: Some(size[1]) },
-            },
-            wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-        );
         commands.push(encoder.finish());
-        let submission = state.queue.submit(commands);
+        drop(renderer);
+        let encoded = start.elapsed();
+        let shown = self.presenter.present(commands, &crate::host::Native, scale)?;
+        let mut renderer = self.state.renderer.write();
         for id in &delta.free {
             renderer.free_texture(id);
         }
-        drop(renderer);
-        let submitted = start.elapsed();
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        target.readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        state.device.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(Duration::from_secs(5)) }).map_err(|e| e.to_string())?;
-        rx.recv_timeout(Duration::from_secs(1)).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
-        {
-            let mapped = target.readback.slice(..).get_mapped_range().map_err(|e| e.to_string())?;
-            for (src, dst) in mapped.chunks_exact(target.stride as usize).zip(self.pixels.chunks_exact_mut(size[0] as usize)) {
-                for (pixel, out) in src.as_chunks::<4>().0.iter().zip(dst) {
-                    *out = u32::from_le_bytes([pixel[2], pixel[1], pixel[0], pixel[3]]);
-                }
-            }
-        }
-        target.readback.unmap();
         log::debug!(target: "photocraft_haiku",
-            "GPU frame {}x{}: submit {:.2} ms, readback {:.2} ms",
+            "GPU frame {}x{}: encode {:.2} ms, present {:.2} ms ({}, {} px in {} rects)",
             size[0],
             size[1],
-            submitted.as_secs_f64() * 1e3,
-            (start.elapsed() - submitted).as_secs_f64() * 1e3
+            encoded.as_secs_f64() * 1e3,
+            shown.wait.as_secs_f64() * 1e3,
+            if shown.direct { "direct" } else { "readback" },
+            shown.pixels,
+            shown.rects
         );
-        Ok(())
+        Ok(shown)
     }
-    pub fn pixels(&self) -> &[u32] {
-        &self.pixels
+    /// The last frame again, where the window's place on the screen changed.
+    pub fn present_again(&mut self, scale: f32) -> Result<Shown, String> {
+        self.presenter.present(Vec::new(), &crate::host::Native, scale)
     }
-    pub fn image(&self) -> egui::ColorImage {
-        let size = self.target.as_ref().map_or([0, 0], |t| t.size.map(|n| n as usize));
-        let rgba: Vec<u8> = self
-            .pixels
-            .iter()
-            .flat_map(|p| {
-                let [b, g, r, a] = p.to_le_bytes();
-                [r, g, b, a]
-            })
-            .collect();
-        egui::ColorImage::from_rgba_premultiplied(size, &rgba)
+    pub fn wants_present(&self) -> bool {
+        self.presenter.wants_present()
+    }
+    pub fn sync_due(&self) -> Option<Instant> {
+        self.presenter.sync_due()
+    }
+    /// Brings app_server's copy of the window up to date with what went straight to the screen.
+    pub fn sync(&mut self, scale: f32) -> Result<Shown, String> {
+        self.presenter.sync(&crate::host::Native, scale)
+    }
+    pub fn image(&mut self) -> Result<egui::ColorImage, String> {
+        self.presenter.image()
+    }
+}
+impl Drop for Gpu {
+    fn drop(&mut self) {
+        self.presenter.detach(&crate::host::Native);
     }
 }

@@ -131,7 +131,7 @@ impl Shell {
             app.perf.gpu_info.backend = "software".into();
             app.perf.gpu_info.device_type = "cpu".into();
         }
-        app.perf.gpu_info.present = if gpu.is_some() { "native bitmap readback" } else { "native software bitmap" }.into();
+        app.perf.gpu_info.present = gpu.as_ref().map_or("native software bitmap", |g| g.present_mode().name()).into();
         log::info!(target: "photocraft_haiku", "air/OS renderer: {}", if gpu.is_some() { "Vulkan" } else { "CPU" });
         let dev = host::device_scale();
         let native_ppp = ui_scale * dev;
@@ -179,16 +179,36 @@ impl Shell {
             if happened || due {
                 self.frame();
             }
+            self.present_chores();
+        }
+    }
+
+    /// What the presenter does between frames: the last frame again where the window moved on
+    /// the screen, and app_server's copy catching up with frames that went straight to the screen.
+    fn present_chores(&mut self) {
+        let dev = self.dev;
+        let Some(gpu) = &mut self.gpu else { return };
+        let result = if gpu.wants_present() {
+            crate::crash_guard::guard("GPU present", || gpu.present_again(dev))
+        } else if gpu.sync_due().is_some_and(|at| at <= Instant::now()) {
+            crate::crash_guard::guard("GPU sync", || gpu.sync(dev))
+        } else {
+            return;
+        };
+        if let Err(e) = result {
+            log::error!(target: "photocraft_haiku", "{e}");
+            if let Some(health) = &self.gpu_health {
+                health.mark(photocraft_ui_egui::gpu_canvas::Fault::Error(e));
+            }
+            self.ctx.request_repaint();
         }
     }
 
     /// When the next frame is due, if one is.
     fn next_due(&self) -> Option<Instant> {
         let woken = self.woken_for.lock().ok().and_then(|w| *w);
-        match (self.repaint_at, woken) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        let sync = self.gpu.as_ref().and_then(|g| g.sync_due());
+        [self.repaint_at, woken, sync].into_iter().flatten().min()
     }
 
     fn timeout(&self) -> Option<Duration> {
@@ -454,9 +474,11 @@ impl Shell {
             let t2 = Instant::now();
             let clear = ctx.global_style().visuals.panel_fill;
             let (pw, ph) = (w as usize, h as usize);
+            let dev = self.dev;
+            // The presenter shows GPU frames itself; the software rasteriser's go below.
             let dirty = if let Some(gpu) = &mut self.gpu {
-                match crate::crash_guard::guard("GPU frame", || gpu.render([pw as u32, ph as u32], &prims, &out.textures_delta, ppp, clear)) {
-                    Ok(()) => Some([0, 0, pw, ph]),
+                match crate::crash_guard::guard("GPU frame", || gpu.render([pw as u32, ph as u32], &prims, &out.textures_delta, ppp, clear, dev)) {
+                    Ok(_) => None,
                     Err(e) => {
                         log::error!(target: "photocraft_haiku", "{e}");
                         if let Some(health) = &self.gpu_health {
@@ -475,9 +497,8 @@ impl Shell {
                 ctx.request_repaint();
                 delay = Duration::ZERO;
             }
-            if let Some(dirty) = dirty.filter(|_| !faulted && !minimized) {
-                let pixels = self.gpu.as_ref().map_or_else(|| self.raster.pixels(), |g| g.pixels());
-                host::present(pixels, pw, ph, dirty, self.dev);
+            if let Some(dirty) = dirty.filter(|_| !faulted && !minimized && self.gpu.is_none()) {
+                host::present(self.raster.pixels(), pw, ph, dirty, self.dev);
             }
             log::debug!(target: "photocraft_haiku",
                 "frame {pw}x{ph}: ui {:.1} ms, tessellate {:.1} ms, raster {:.1} ms, present {:.1} ms, dirty {dirty:?}",
@@ -492,7 +513,14 @@ impl Shell {
         out.textures_delta.clear();
         if !self.gpu_health.as_ref().is_some_and(|h| h.fault().is_some()) {
             for callback in std::mem::take(&mut self.screenshots) {
-                let image = Arc::new(self.gpu.as_ref().map_or_else(|| self.raster.image(), |g| g.image()));
+                let image = match self.gpu.as_mut() {
+                    Some(gpu) => gpu.image().unwrap_or_else(|e| {
+                        log::warn!(target: "photocraft_haiku", "screenshot: {e}");
+                        egui::ColorImage::default()
+                    }),
+                    None => self.raster.image(),
+                };
+                let image = Arc::new(image);
                 callback.complete(image);
                 delay = Duration::ZERO;
             }

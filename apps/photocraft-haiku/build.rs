@@ -8,7 +8,8 @@ fn main() {
         return;
     }
     cc::Build::new().cpp(true).file("native/host.cpp").flag("-Wno-multichar").flag("-Wno-unused-parameter").opt_level(2).compile("photocraft_haiku_host");
-    for lib in ["be", "tracker", "translation", "stdc++"] {
+    // game: BDirectWindow, which lets frames go straight into the screen.
+    for lib in ["be", "game", "tracker", "translation", "stdc++"] {
         println!("cargo:rustc-link-lib=dylib={lib}");
     }
 }

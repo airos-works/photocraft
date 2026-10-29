@@ -7,6 +7,7 @@ mod control_server;
 #[cfg(target_os = "haiku")]
 #[path = "../../photocraft/src/crash_guard.rs"]
 mod crash_guard;
+mod damage;
 #[cfg(target_os = "haiku")]
 mod gpu;
 #[cfg(target_os = "haiku")]
@@ -15,7 +16,11 @@ mod keys;
 #[cfg(target_os = "haiku")]
 #[path = "../../photocraft/src/logging.rs"]
 mod logging;
+#[cfg(target_os = "haiku")]
+mod present;
 mod raster;
+#[cfg(target_os = "haiku")]
+mod scanout;
 #[cfg(target_os = "haiku")]
 mod services;
 #[cfg(target_os = "haiku")]

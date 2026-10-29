@@ -9,12 +9,39 @@ input mapping and software rasterizer reuse the existing *craft ports.
 ## Rendering
 
 The native host uses wgpu/Vulkan for both egui and PhotoCraft's existing tiled
-GPU canvas/compositor. It renders to a reusable offscreen texture, reads the
-completed frame into a reusable buffer, and presents a native `BBitmap`.
-This avoids a software triangle rasterizer in the accelerated path. There is
-still a full-window readback: this is not a direct Vulkan swapchain or zero-copy
-presentation. GPU submission and readback timings are logged separately with
-`RUST_LOG=warn,photocraft*=info,photocraft_haiku=debug`.
+GPU canvas/compositor. Frames are drawn in BGRA (the screen's and a `B_RGB32`
+bitmap's byte order, so nothing is swizzled on the processor) into the
+presenter's frame texture (`apps/photocraft-haiku/src/present.rs`), which gets
+them onto the window. `PHOTOCRAFT_PRESENT` picks how:
+
+- `readback` (the default): a compute pass compares the frame with the one
+  app_server already has, 64 px tile by tile. Only the changed tiles, joined
+  into a few rectangles (`damage.rs`), are copied back and drawn into the
+  window's `BBitmap`; a frame identical to the last one copies nothing.
+- `full`: the whole frame is read back and drawn every time (the first host).
+- `direct` (experimental): the window is a `BDirectWindow` with air/OS's
+  `B_DIRECT_DEVICE_PIXELS`, the screen's frame buffer is imported into Vulkan
+  with the drivers' private `VkImportScanoutMemoryHAIKU` (`scanout.rs`, as
+  Summit does), and the GPU copies each frame into the visible parts of the
+  window: nothing is read back and the processor does not wait. app_server's
+  own copy of the screen catches up through a readback a quarter of a second
+  after the screen changed. The window's direct daemon thread waits for the
+  GPU's copies before app_server moves or covers the window, and anything the
+  direct path cannot do (another driver, a resize in progress, an error) is read
+  back instead. `PRESENT_VERIFY=1` reads the frame buffer back after each direct
+  frame and logs how many visible pixels differ from the frame and how many
+  covered ones equal it. It is not the default: on the Framework 13 (RADV,
+  amdgpu_drm) the Vulkan device is lost a few seconds after the frame buffer is
+  imported, even when nothing is copied into it (the copies themselves were
+  pixel-exact while it lasted), and it has not been tried on NVK.
+
+Measured on the Framework 13 (Radeon 760M, 175 %, a 1000×700 window = 1750×1225
+device pixels; `tools/haiku/present-bench.py`, 40 samples each, against the
+0.17.0~airos1-1 build): app_server's processor time 0.589 → 0.208 s,
+PhotoCraft's 3.17 → 1.01 s, a hover's request-to-frame latency 21.7 → 15.6 ms
+(median), the whole-canvas change about the same (21.2 → 20.7 ms); the median
+frame copies nothing back. Per-frame present costs are logged with
+`RUST_LOG=warn,photocraft_haiku=debug,present=debug`.
 
 `PHOTOCRAFT_RENDERER=auto|cpu|vulkan` selects the host renderer. Auto is the default
 and falls back to software if a hardware adapter cannot initialize. Saved CPU

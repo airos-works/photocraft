@@ -5226,6 +5226,7 @@ dependencies = [
 name = "photocraft-haiku"
 version = "0.17.0"
 dependencies = [
+ "ash",
  "cc",
  "chrono",
  "egui",
