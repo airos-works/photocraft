@@ -36,7 +36,16 @@ if [[ -n ${CRAFT_FONTS_DIR-"$ROOT/../craft-fonts"} ]]; then
         cp "$ofl" "$DOCS/licenses/craft-fonts/OFL-$(basename -- "$(dirname -- "$ofl")").txt"
     done
 fi
+# egui's default fonts come from the storytold/egui commit patched in Cargo.toml (a git checkout).
 mkdir -p "$DOCS/licenses/epaint_default_fonts"
-cp "$CARGO_HOME"/registry/src/*/epaint_default_fonts-0.36.2/fonts/*.txt "$DOCS/licenses/epaint_default_fonts/"
+EGUI_REV=$(sed -n 's/^epaint_default_fonts = .*rev = "\([0-9a-f]*\)".*/\1/p' Cargo.toml)
+cp "$CARGO_HOME"/git/checkouts/egui-*/"${EGUI_REV:0:7}"/crates/epaint_default_fonts/fonts/*.txt "$DOCS/licenses/epaint_default_fonts/"
+# hayro, the PDF renderer the print backend uses, embeds fonts, CMaps and colour profiles.
+for crate in hayro-cmap hayro-interpret hayro-jpeg2000; do
+	version=$(awk -F '"' -v name="$crate" '$0 == "name = \"" name "\"" { found = 1; next }
+		found && /^version = / { print $2; exit }' Cargo.lock)
+	mkdir -p "$DOCS/licenses/$crate"
+	cp "$CARGO_HOME"/registry/src/*/"$crate-$version"/assets/*LICENSE* "$DOCS/licenses/$crate/"
+done
 ln -s ../../../../apps/PhotoCraft "$STAGE/data/deskbar/menu/Applications/PhotoCraft"
 "$TOOLS/package/package" create -C "$STAGE" "$OUT/photocraft-$VERSION-x86_64.hpkg"
